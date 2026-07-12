@@ -1,0 +1,64 @@
+"""Configuration loading.
+
+Settings live in a YAML file (see config/config.example.yaml). The OANDA
+API token is read from the OANDA_API_TOKEN environment variable — secrets
+never belong in files that could be committed to git.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict
+
+from .risk.manager import RiskConfig
+
+
+@dataclass
+class OandaSettings:
+    account_id: str = ""
+    token: str = ""
+
+
+@dataclass
+class AppConfig:
+    mode: str = "practice"            # "practice" (demo money) or "live"
+    dry_run: bool = True              # log orders instead of sending them
+    instrument: str = "EUR_USD"
+    granularity: str = "H1"
+    lookback: int = 300               # candles of history given to the strategy
+    strategy_name: str = "sma_crossover"
+    strategy_params: Dict[str, Any] = field(default_factory=dict)
+    risk: RiskConfig = field(default_factory=RiskConfig)
+    oanda: OandaSettings = field(default_factory=OandaSettings)
+
+
+def load_config(path: str | Path) -> AppConfig:
+    import yaml  # imported here so backtesting works without PyYAML installed
+
+    with open(path) as f:
+        raw = yaml.safe_load(f) or {}
+
+    mode = str(raw.get("mode", "practice")).lower()
+    if mode not in ("practice", "live"):
+        raise ValueError(f"mode must be 'practice' or 'live', got '{mode}'")
+
+    strategy = raw.get("strategy") or {}
+    risk_raw = raw.get("risk") or {}
+    oanda_raw = raw.get("oanda") or {}
+
+    return AppConfig(
+        mode=mode,
+        dry_run=bool(raw.get("dry_run", True)),
+        instrument=str(raw.get("instrument", "EUR_USD")),
+        granularity=str(raw.get("granularity", "H1")),
+        lookback=int(raw.get("lookback", 300)),
+        strategy_name=str(strategy.get("name", "sma_crossover")),
+        strategy_params=dict(strategy.get("params") or {}),
+        risk=RiskConfig(**risk_raw),
+        oanda=OandaSettings(
+            account_id=str(oanda_raw.get("account_id", "")),
+            token=os.environ.get("OANDA_API_TOKEN", ""),
+        ),
+    )

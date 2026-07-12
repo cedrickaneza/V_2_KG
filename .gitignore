@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Secrets & local config (never commit your real API keys!)
+config/config.yaml
+.env
+
+# Runtime output & downloaded/generated market data
+logs/
+data/*.csv
+*.equity.csv
