@@ -29,9 +29,17 @@ Two hard platform constraints shape this class, both different from OANDA:
 Only a small slice of the v2 API is used:
     GET    /v2/account                    -> equity
     GET    /v2/positions/{symbol}         -> current position (404 = none)
+    GET    /v2/orders?status=open         -> find orphaned resting orders
     POST   /v2/orders                     -> market or stop order
     DELETE /v2/orders/{id}                -> cancel a resting order
     DELETE /v2/positions/{symbol}         -> liquidate a position
+
+Known, accepted gaps (paper-trading grade, not production grade):
+* if the entry fills but the follow-up stop order submission fails, the
+  position is briefly unprotected until the next cycle's log shows the
+  exception and a human intervenes;
+* a POST retried after a network timeout could double-submit (no
+  idempotency key) — same tradeoff the OANDA client makes.
 """
 
 from __future__ import annotations
@@ -84,7 +92,9 @@ class AlpacaBroker(Broker):
 
     def _request(
         self, method: str, path: str, allow_404: bool = False, **kwargs: Any
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Any:
+        """Returns parsed JSON (dict for most endpoints, list for /v2/orders),
+        or None when allow_404 swallowed a 404."""
         url = f"{self.host}{path}"
         last_error: Optional[Exception] = None
         for attempt in range(3):
@@ -193,7 +203,16 @@ class AlpacaBroker(Broker):
 
     def _cancel_resting_stop(self, instrument: str) -> None:
         order_id = self._stop_order_ids.pop(instrument, None)
-        if order_id is None:
+        if order_id is not None:
+            # allow_404: the stop may already have filled or been cancelled
+            self._request("DELETE", f"/v2/orders/{order_id}", allow_404=True)
             return
-        # allow_404: the stop may already have filled or been cancelled
-        self._request("DELETE", f"/v2/orders/{order_id}", allow_404=True)
+        # No tracked id — e.g. the bot restarted since the stop was placed.
+        # A resting stop left behind after liquidation would fire later with
+        # no position behind it, so find and cancel any open orders for this
+        # symbol before the caller closes the position.
+        data = self._request(
+            "GET", "/v2/orders", params={"status": "open", "symbols": instrument}
+        )
+        for order in data or []:
+            self._request("DELETE", f"/v2/orders/{order['id']}", allow_404=True)

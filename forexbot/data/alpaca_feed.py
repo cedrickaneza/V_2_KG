@@ -43,6 +43,19 @@ class AlpacaFeedError(RuntimeError):
     pass
 
 
+def drop_incomplete(
+    candles: List[Candle], step_seconds: int, now: datetime
+) -> List[Candle]:
+    """Remove bars whose interval hasn't finished yet.
+
+    A bar's timestamp is the START of its interval, so it is complete only
+    once `time + step <= now`. Alpaca (unlike OANDA) doesn't flag this, and
+    the newest bar in a response is usually still forming.
+    """
+    step = timedelta(seconds=step_seconds)
+    return [c for c in candles if c.time + step <= now]
+
+
 class AlpacaCryptoFeed:
     def __init__(self, api_key_id: str, api_secret_key: str, timeout: float = 15.0):
         if not api_key_id or not api_secret_key:
@@ -59,24 +72,42 @@ class AlpacaCryptoFeed:
     def get_candles(
         self,
         symbol: str,
-        timeframe: str = "1Hour",
-        limit: int = 500,
+        granularity: str = "1Hour",
+        count: int = 500,
         start: Optional[datetime] = None,
         end: Optional[datetime] = None,
     ) -> List[Candle]:
-        """Fetch up to `limit` crypto bars (most recent first if no range given)."""
-        if timeframe not in GRANULARITY_SECONDS:
+        """Fetch up to `count` most recent COMPLETED crypto bars.
+
+        The parameter names mirror OandaFeed.get_candles so TradingBot can
+        call either feed identically (Alpaca itself says "timeframe"/"limit").
+
+        Two Alpaca quirks are handled here so callers never see them:
+        * bars carry no "complete" flag (unlike OANDA), and the latest bar is
+          usually still forming — any bar whose interval hasn't finished yet
+          is dropped, keeping the project-wide "never trade a half-formed
+          candle" rule intact;
+        * when `start` is omitted the API defaults to the beginning of the
+          current DAY and `limit` truncates from the OLDEST side — so with no
+          explicit start we ask from `count` intervals back, which spans the
+          newest bars (crypto trades 24/7, so the bar stream has no gaps).
+        """
+        if granularity not in GRANULARITY_SECONDS:
             raise ValueError(
-                f"unsupported timeframe '{timeframe}' "
+                f"unsupported granularity '{granularity}' "
                 f"(supported: {', '.join(GRANULARITY_SECONDS)})"
             )
+        step = GRANULARITY_SECONDS[granularity]
+        now = datetime.now(timezone.utc)
+        if start is None:
+            start = now - timedelta(seconds=step * (count + 2))
+
         params: Dict[str, Any] = {
             "symbols": symbol,
-            "timeframe": timeframe,
-            "limit": str(min(limit, MAX_LIMIT_PER_REQUEST)),
+            "timeframe": granularity,
+            "limit": str(min(count + 5, MAX_LIMIT_PER_REQUEST)),
+            "start": start.astimezone(timezone.utc).isoformat(),
         }
-        if start is not None:
-            params["start"] = start.astimezone(timezone.utc).isoformat()
         if end is not None:
             params["end"] = end.astimezone(timezone.utc).isoformat()
 
@@ -88,7 +119,7 @@ class AlpacaCryptoFeed:
                 f"Alpaca bars request failed ({resp.status_code}): {resp.text[:300]}"
             )
         bars = resp.json().get("bars", {}).get(symbol, [])
-        return [
+        candles = [
             Candle(
                 time=parse_time(bar["t"]),
                 open=float(bar["o"]),
@@ -99,18 +130,20 @@ class AlpacaCryptoFeed:
             )
             for bar in bars
         ]
+        candles = drop_incomplete(candles, step, now)
+        return candles[-count:]
 
     def download_history(
-        self, symbol: str, timeframe: str = "1Hour", days: int = 730
+        self, symbol: str, granularity: str = "1Hour", days: int = 730
     ) -> List[Candle]:
         """Page forward from `days` ago to now, for building backtest datasets."""
-        step = GRANULARITY_SECONDS[timeframe]
+        step = GRANULARITY_SECONDS[granularity]
         start = datetime.now(timezone.utc) - timedelta(days=days)
         out: List[Candle] = []
         seen = set()
         while True:
             batch = self.get_candles(
-                symbol, timeframe, limit=MAX_LIMIT_PER_REQUEST, start=start
+                symbol, granularity, count=MAX_LIMIT_PER_REQUEST, start=start
             )
             new = [c for c in batch if c.time not in seen]
             if not new:

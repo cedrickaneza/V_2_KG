@@ -14,7 +14,8 @@ from typing import Dict, List, Sequence, Tuple
 
 from ..execution.broker import ClosedTrade
 
-# ~24 hourly candles x ~260 trading days
+# Forex (OANDA-style keys): ~24 hourly candles x ~260 trading days.
+# Crypto (Alpaca-style keys): trades every day, so a 365-day year.
 PERIODS_PER_YEAR = {
     "M1": 60 * 24 * 260,
     "M5": 12 * 24 * 260,
@@ -23,6 +24,13 @@ PERIODS_PER_YEAR = {
     "H1": 24 * 260,
     "H4": 6 * 260,
     "D": 260,
+    "1Min": 60 * 24 * 365,
+    "5Min": 12 * 24 * 365,
+    "15Min": 4 * 24 * 365,
+    "30Min": 2 * 24 * 365,
+    "1Hour": 24 * 365,
+    "4Hour": 6 * 365,
+    "1Day": 365,
 }
 
 
