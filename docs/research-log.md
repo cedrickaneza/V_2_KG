@@ -7,6 +7,39 @@ real money. Append new entries at the top.
 
 ---
 
+## 2026-07-22 (evening) — ETH/USD cross-check: trend-following confirms, RSI discarded
+
+**Setup.** Identical to the BTC daily test below: 2,028 daily ETH/USD bars
+(2021-01-01 → 2026-07-21), walk-forward 600/150, long-only,
+`--spread-pct 0.005`. Purpose: if the daily result repeats on a second
+asset the strategies never saw, it is much less likely to be luck.
+
+**Out-of-sample results (ETH, with BTC alongside for comparison):**
+
+| Strategy | ETH OOS | BTC OOS | Verdict |
+|---|---|---|---|
+| Donchian breakout | **+7.3%** (PF 1.54, Sharpe 0.71, maxDD 2.9%) | +2.2% | keep — best result in the project |
+| SMA crossover | +2.6% (PF 1.14) | +4.8% | keep |
+| RSI mean-reversion | **−4.2%** (PF 0.30) | +1.1% | **discard** — inconsistent across assets |
+
+**Reading.**
+- The trend-following family (SMA, Donchian) is now positive out-of-sample
+  on BOTH assets over ~4 years each after honest fees. RSI mean-reversion
+  flipped sign between assets — exactly what a non-edge looks like; dropped.
+- Honesty caveat: BTC and ETH are strongly correlated, so this is one
+  confirmation from a *sibling* asset, not an independent universe. Still,
+  the sign of a real (if modest) effect: daily-timeframe crypto trend
+  capture survives 0.5% round-trip fees.
+- Returns remain modest at the bot's cautious 0.5% risk sizing
+  (≈1–2%/year); drawdowns are tiny (≤4.7%), so there is headroom to size
+  up within the 2% cap once the edge is trusted.
+
+**Next:** (1) maker/limit execution — cut fees from 0.25% to ≤0.15%/side;
+(2) consider trading BTC+ETH together (diversifies entries); (3) fee-aware
+entry filter.
+
+---
+
 ## 2026-07-22 (later) — Daily bars, 5.5 years: first faint pulse — KEEP RESEARCHING
 
 **Setup.** 2,028 daily BTC/USD bars (2021-01-01 → 2026-07-21). Walk-forward
