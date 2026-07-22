@@ -28,6 +28,10 @@ from forexbot.config import load_config  # noqa: E402
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="config/config.yaml")
+    parser.add_argument("--once", action="store_true",
+                        help="run a single decision cycle and exit — for daily-candle "
+                             "setups where the bot is woken once a day instead of "
+                             "running continuously")
     args = parser.parse_args()
 
     if not Path(args.config).exists():
@@ -49,7 +53,11 @@ def main() -> None:
         if not config.oanda.account_id:
             raise SystemExit("Set oanda.account_id in your config file.")
 
-    TradingBot(config).run_forever()
+    bot = TradingBot(config)
+    if args.once:
+        bot.run_once()
+    else:
+        bot.run_forever()
 
 
 if __name__ == "__main__":

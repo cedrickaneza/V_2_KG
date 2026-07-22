@@ -43,9 +43,12 @@ from .data.oanda_feed import OandaFeed
 from .execution.alpaca_broker import AlpacaBroker
 from .execution.oanda_broker import OandaBroker
 from .risk.manager import RiskManager
+from .state import load_state, save_state
 from .strategies import FLAT, build_strategy
 
 log = logging.getLogger("forexbot")
+
+STATE_FILE = Path("logs/state.json")
 
 
 def setup_logging(log_dir: str = "logs") -> None:
@@ -101,6 +104,11 @@ class TradingBot:
 
         self.long_only = getattr(self.broker, "long_only", False)
 
+        # restore risk history + tracked take-profits from the previous run,
+        # so one-shot daily runs behave like one continuous bot
+        if load_state(STATE_FILE, self.risk, self.broker):
+            log.info("restored state from %s", STATE_FILE)
+
     # -- scheduling ------------------------------------------------------
 
     def seconds_until_next_candle(self) -> float:
@@ -123,6 +131,8 @@ class TradingBot:
                 self._run_instrument(instrument, equity)
             except Exception:
                 log.exception("cycle failed for %s; continuing with the rest", instrument)
+
+        save_state(STATE_FILE, self.risk, self.broker)
 
     def _run_instrument(self, instrument: str, equity: float) -> None:
         cfg = self.config
@@ -212,13 +222,13 @@ class TradingBot:
 
     # -- main loop -----------------------------------------------------------
 
-    def run_forever(self) -> None:
+    def _log_banner(self, mode_note: str = "") -> None:
         cfg = self.config
         strategy_desc = next(iter(self.strategies.values())).describe()
         log.info("=" * 60)
         log.info(
-            "forexbot starting: %s %s %s mode=%s dry_run=%s",
-            ", ".join(cfg.instruments), cfg.granularity, strategy_desc,
+            "forexbot starting%s: %s %s %s mode=%s dry_run=%s",
+            mode_note, ", ".join(cfg.instruments), cfg.granularity, strategy_desc,
             cfg.mode.upper(), cfg.dry_run,
         )
         log.info(
@@ -228,6 +238,18 @@ class TradingBot:
             cfg.risk.max_drawdown_pct * 100,
         )
         log.info("=" * 60)
+
+    def run_once(self) -> None:
+        """One decision cycle, then exit — for once-a-day scheduled or manual
+        runs on daily candles. State is persisted so consecutive one-shot
+        runs behave like one continuous bot."""
+        self._log_banner(" (single cycle)")
+        self.run_cycle()
+        log.info("cycle done — state saved, exiting (one-shot mode)")
+
+    def run_forever(self) -> None:
+        cfg = self.config
+        self._log_banner()
 
         while True:
             try:
