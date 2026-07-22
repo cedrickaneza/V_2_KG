@@ -12,6 +12,11 @@ The sizing formula ``units = risk_amount / stop_distance`` is exact when the
 account currency equals the pair's quote currency (e.g. a USD account trading
 EUR_USD). For cross pairs it is an approximation — acceptable while learning,
 and the ``max_units`` cap bounds the error.
+
+Position size is returned as a float, not rounded to a whole number: forex
+brokers only ever produce whole-unit sizes at realistic account scales, but
+crypto brokers price in fractional coins (0.01 BTC), so rounding to int here
+would silently zero out every crypto trade.
 """
 
 from __future__ import annotations
@@ -32,7 +37,7 @@ class RiskConfig:
     atr_tp_multiplier: float = 3.0     # take-profit distance = 3 x ATR (1.5:1 reward:risk)
     max_daily_loss_pct: float = 0.02   # stop opening trades after losing 2% in a day
     max_drawdown_pct: float = 0.10     # kill switch: halt for good at -10% from peak
-    max_units: int = 100_000           # hard cap on position size (1 standard lot)
+    max_units: float = 100_000         # hard cap on position size (1 standard lot; set much lower for crypto)
 
     def __post_init__(self) -> None:
         if not 0 < self.risk_per_trade <= 0.02:
@@ -102,9 +107,9 @@ class RiskManager:
     def take_profit_distance(self, stop_dist: float) -> float:
         return stop_dist * self.config.atr_tp_multiplier / self.config.atr_stop_multiplier
 
-    def position_size(self, equity: float, stop_dist: float) -> int:
+    def position_size(self, equity: float, stop_dist: float) -> float:
         """Units such that hitting the stop loses ~risk_per_trade of equity."""
         if stop_dist <= 0 or equity <= 0:
-            return 0
-        units = int(equity * self.config.risk_per_trade / stop_dist)
+            return 0.0
+        units = equity * self.config.risk_per_trade / stop_dist
         return min(units, self.config.max_units)

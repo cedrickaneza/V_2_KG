@@ -12,6 +12,14 @@ Safety defaults:
     * mode: practice -> demo account (fake money) even when dry_run is off
     * mode: live requires BOTH editing the config AND setting the env var
       FOREXBOT_I_UNDERSTAND_LIVE_RISK=yes
+
+Broker differences this loop has to account for:
+    * OANDA (forex) allows short positions and attaches stop-loss/take-profit
+      to the entry order as a bracket.
+    * Alpaca (crypto) is long-only — a SHORT signal is clamped to FLAT — and
+      cannot bracket orders, so only the stop-loss rides as a resting order
+      on Alpaca's side; take-profit is checked here, once per cycle, against
+      the broker's ``get_take_profit`` (see alpaca_broker.py for why).
 """
 
 from __future__ import annotations
@@ -22,10 +30,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import AppConfig
-from .data.oanda_feed import GRANULARITY_SECONDS, OandaFeed
+from .data.alpaca_feed import GRANULARITY_SECONDS as ALPACA_GRANULARITY_SECONDS
+from .data.alpaca_feed import AlpacaCryptoFeed
+from .data.oanda_feed import GRANULARITY_SECONDS as OANDA_GRANULARITY_SECONDS
+from .data.oanda_feed import OandaFeed
+from .execution.alpaca_broker import AlpacaBroker
 from .execution.oanda_broker import OandaBroker
 from .risk.manager import RiskManager
-from .strategies import build_strategy
+from .strategies import FLAT, build_strategy
 
 log = logging.getLogger("forexbot")
 
@@ -58,18 +70,30 @@ class TradingBot:
 
         self.strategy = build_strategy(config.strategy_name, config.strategy_params)
         self.risk = RiskManager(config.risk)
-        self.feed = OandaFeed(config.oanda.token, practice=practice)
-        self.broker = OandaBroker(
-            config.oanda.account_id, config.oanda.token, practice=practice
-        )
-        self.granularity_seconds = GRANULARITY_SECONDS[config.granularity]
+
+        if config.broker == "alpaca":
+            self.feed = AlpacaCryptoFeed(
+                config.alpaca.api_key_id, config.alpaca.api_secret_key
+            )
+            self.broker = AlpacaBroker(
+                config.alpaca.api_key_id, config.alpaca.api_secret_key, paper=practice
+            )
+            self.granularity_seconds = ALPACA_GRANULARITY_SECONDS[config.granularity]
+        else:
+            self.feed = OandaFeed(config.oanda.token, practice=practice)
+            self.broker = OandaBroker(
+                config.oanda.account_id, config.oanda.token, practice=practice
+            )
+            self.granularity_seconds = OANDA_GRANULARITY_SECONDS[config.granularity]
+
+        self.long_only = getattr(self.broker, "long_only", False)
 
     # -- scheduling ------------------------------------------------------
 
     def seconds_until_next_candle(self) -> float:
         now = datetime.now(timezone.utc).timestamp()
         step = self.granularity_seconds
-        return step - (now % step) + 10  # +10s so OANDA has finalised the candle
+        return step - (now % step) + 10  # +10s so the broker has finalised the candle
 
     # -- one trading cycle ----------------------------------------------------
 
@@ -91,6 +115,8 @@ class TradingBot:
         self.risk.update(now, equity)
 
         stance = self.strategy.target_position(candles)
+        if self.long_only and stance < 0:
+            stance = FLAT
         pos = self.broker.get_position(cfg.instrument)
         held = 0 if pos is None else (1 if pos.units > 0 else -1)
         last_close = candles[-1].close
@@ -107,15 +133,40 @@ class TradingBot:
         if self.risk.halted:
             log.error("KILL SWITCH ACTIVE: %s — no trading", self.risk.halt_reason)
             return
+
+        # brokers that can't bracket an order (e.g. Alpaca crypto) track
+        # take-profit here instead of on the exchange — see bot.py's module
+        # docstring and alpaca_broker.py for why this is a deliberate,
+        # disclosed simplification rather than a broker-enforced exit.
+        get_take_profit = getattr(self.broker, "get_take_profit", None)
+        if pos is not None and get_take_profit is not None:
+            tp = get_take_profit(cfg.instrument)
+            crossed = tp is not None and (
+                (pos.units > 0 and last_close >= tp) or (pos.units < 0 and last_close <= tp)
+            )
+            if crossed:
+                if cfg.dry_run:
+                    log.info(
+                        "[dry-run] would close %+g units of %s (take-profit reached)",
+                        pos.units, cfg.instrument,
+                    )
+                else:
+                    self.broker.close_position(cfg.instrument, reason="take_profit")
+                    log.info(
+                        "closed %+g units of %s (take-profit reached)",
+                        pos.units, cfg.instrument,
+                    )
+                return
+
         if stance == held:
             return
 
         if pos is not None:
             if cfg.dry_run:
-                log.info("[dry-run] would close %+d units of %s", pos.units, cfg.instrument)
+                log.info("[dry-run] would close %+g units of %s", pos.units, cfg.instrument)
             else:
                 self.broker.close_position(cfg.instrument)
-                log.info("closed %+d units of %s", pos.units, cfg.instrument)
+                log.info("closed %+g units of %s", pos.units, cfg.instrument)
 
         if stance == 0:
             return
@@ -142,12 +193,12 @@ class TradingBot:
 
         if cfg.dry_run:
             log.info(
-                "[dry-run] would open %+d units of %s (SL=%.5f TP=%.5f)",
+                "[dry-run] would open %+g units of %s (SL=%.5f TP=%.5f)",
                 units, cfg.instrument, sl, tp,
             )
         else:
             self.broker.market_order(cfg.instrument, units, stop_loss=sl, take_profit=tp)
-            log.info("opened %+d units of %s (SL=%.5f TP=%.5f)", units, cfg.instrument, sl, tp)
+            log.info("opened %+g units of %s (SL=%.5f TP=%.5f)", units, cfg.instrument, sl, tp)
 
     # -- main loop -----------------------------------------------------------
 

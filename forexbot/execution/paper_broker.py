@@ -9,6 +9,11 @@ Simplifications, deliberately conservative where possible:
   if both could have been hit inside one candle, the STOP is assumed to
   have been hit first (pessimistic).
 * no slippage model beyond the spread; real fills are slightly worse.
+
+Set ``long_only=True`` to backtest as if trading a venue that cannot short
+(e.g. Alpaca crypto) — a short signal must be rejected here rather than
+silently filled, or the backtest would claim an edge the venue can't
+actually deliver.
 """
 
 from __future__ import annotations
@@ -20,10 +25,16 @@ from .broker import Broker, ClosedTrade, Position
 
 
 class PaperBroker(Broker):
-    def __init__(self, starting_balance: float = 10_000.0, spread: float = 0.00008):
+    def __init__(
+        self,
+        starting_balance: float = 10_000.0,
+        spread: float = 0.00008,
+        long_only: bool = False,
+    ):
         self.starting_balance = starting_balance
         self.balance = starting_balance          # realised cash
         self.spread = spread
+        self.long_only = long_only
         self.position: Optional[Position] = None
         self.trades: List[ClosedTrade] = []
         self._candle: Optional[Candle] = None    # the candle currently being simulated
@@ -73,7 +84,7 @@ class PaperBroker(Broker):
     def market_order(
         self,
         instrument: str,
-        units: int,
+        units: float,
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None,
     ) -> None:
@@ -81,6 +92,11 @@ class PaperBroker(Broker):
             raise RuntimeError("process_candle() must be called before placing orders")
         if units == 0:
             return
+        if self.long_only and units < 0:
+            raise ValueError(
+                "long_only broker cannot open a short position; the strategy/engine "
+                "should have clamped this signal to flat instead of calling market_order"
+            )
         if self.position is not None:
             raise RuntimeError("PaperBroker holds one position at a time; close it first")
         half = self.spread / 2

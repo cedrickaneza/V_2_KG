@@ -52,6 +52,8 @@ def main() -> None:
     parser.add_argument("--risk-per-trade", type=float, default=0.005)
     parser.add_argument("--granularity", default="H1", help="candle size of the data (for Sharpe annualisation)")
     parser.add_argument("--equity-out", help="optional CSV path to save the equity curve")
+    parser.add_argument("--long-only", action="store_true",
+                        help="reject short signals, matching a venue that can't short (e.g. Alpaca crypto)")
     args = parser.parse_args()
 
     candles = load_candles_csv(args.data)
@@ -62,12 +64,14 @@ def main() -> None:
         starting_balance=args.balance,
         spread=args.spread,
         granularity=args.granularity,
+        long_only=args.long_only,
     )
 
     print(f"data      : {args.data} ({len(candles)} candles, "
           f"{candles[0].time:%Y-%m-%d} .. {candles[-1].time:%Y-%m-%d})")
     print(f"strategy  : {strategy.describe()}")
-    print(f"risk      : {args.risk_per_trade:.2%} per trade, spread {args.spread}")
+    print(f"risk      : {args.risk_per_trade:.2%} per trade, spread {args.spread}"
+          + (", long-only" if args.long_only else ""))
     print()
 
     result = engine.run(candles)

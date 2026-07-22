@@ -4,7 +4,10 @@ Every broker — the in-memory simulator used for backtesting and the real
 OANDA client — implements this same small interface, so the rest of the
 code never cares which one it is talking to.
 
-Sign convention: positive units = long, negative units = short.
+Sign convention: positive units = long, negative units = short. Units are
+floats because crypto brokers (e.g. Alpaca) trade fractional quantities
+(0.01 BTC); forex brokers deal in whole currency units, which just happen
+to be floats with no fractional part.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ from typing import Optional
 @dataclass
 class Position:
     instrument: str
-    units: int                      # +long / -short
+    units: float                    # +long / -short
     entry_price: float
     stop_loss: Optional[float]
     take_profit: Optional[float]
@@ -28,7 +31,7 @@ class Position:
 @dataclass
 class ClosedTrade:
     instrument: str
-    units: int
+    units: float
     entry_time: datetime
     entry_price: float
     exit_time: datetime
@@ -50,7 +53,7 @@ class Broker(ABC):
     def market_order(
         self,
         instrument: str,
-        units: int,
+        units: float,
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None,
     ) -> None:

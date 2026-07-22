@@ -104,17 +104,21 @@ class OandaBroker(Broker):
     def market_order(
         self,
         instrument: str,
-        units: int,
+        units: float,
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None,
     ) -> None:
         if units == 0:
             return
+        # OANDA deals in whole currency units; truncate rather than send "16666.7"
+        whole_units = int(units)
+        if whole_units == 0:
+            return
         digits = price_precision(instrument)
         order: Dict[str, Any] = {
             "type": "MARKET",
             "instrument": instrument,
-            "units": str(units),
+            "units": str(whole_units),
             "timeInForce": "FOK",
             "positionFill": "DEFAULT",
         }

@@ -22,6 +22,14 @@ class TestPositionSizing(unittest.TestCase):
         self.assertEqual(risk.position_size(10_000, 0.0), 0)
         self.assertEqual(risk.position_size(0.0, 0.001), 0)
 
+    def test_fractional_sizing_for_crypto_scale_prices(self):
+        # equity 10_000, risking 0.5% = 50; stop $500 away (BTC-scale) -> 0.1 units.
+        # int()-truncating sizing would silently round this to 0 and never trade.
+        risk = RiskManager(RiskConfig(risk_per_trade=0.005, max_units=10))
+        units = risk.position_size(10_000, 500)
+        self.assertAlmostEqual(units, 0.1)
+        self.assertGreater(units, 0)
+
     def test_config_rejects_reckless_risk(self):
         with self.assertRaises(ValueError):
             RiskConfig(risk_per_trade=0.10)  # 10% per trade — never

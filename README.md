@@ -1,8 +1,10 @@
-# forexbot — a forex trading bot built for learning first, trading second
+# forexbot — a trading bot built for learning first, trading second
 
-A Python forex trading bot with a backtester, walk-forward validation,
-three starter strategies, a strict risk manager, and a connection to
-OANDA's **free practice account** (fake money, real market prices).
+A Python trading bot with a backtester, walk-forward validation, three
+starter strategies, and a strict risk manager. Two brokers are supported:
+**OANDA** (forex, free practice account) and **Alpaca** (crypto, free
+paper account with no identity verification — a good fallback if OANDA
+isn't available in your country).
 
 > ## ⚠️ Read this before anything else
 >
@@ -27,6 +29,13 @@ OANDA's **free practice account** (fake money, real market prices).
 > - Live trading refuses to start unless you *also* set
 >   `FOREXBOT_I_UNDERSTAND_LIVE_RISK=yes` in your environment.
 >
+> **If you're trading crypto via Alpaca**: Alpaca cannot short crypto — the
+> bot automatically clamps every SHORT signal to FLAT for this broker. That
+> means a strategy's real crypto performance can be *meaningfully worse*
+> than its forex backtest, which allowed shorting. Always pass `--long-only`
+> when backtesting or walk-forwarding for this venue (see below) — never
+> trust a number that let the strategy short if you can't actually short.
+>
 > Nothing here is financial advice.
 
 ---
@@ -41,11 +50,12 @@ different broker) without touching the rest.
 flowchart LR
     subgraph DATA["📊 Data layer"]
         CSV["CSV files<br/>(historical candles)"]
-        FEED["OandaFeed<br/>(live candles)"]
+        OFEED["OandaFeed<br/>(live candles)"]
+        AFEED["AlpacaCryptoFeed<br/>(live candles)"]
     end
 
     subgraph BRAIN["🧠 Strategy layer"]
-        STRAT["Strategy<br/>SMA crossover / RSI reversion<br/><i>answers: long, short or flat?</i>"]
+        STRAT["Strategy<br/>SMA crossover / RSI reversion / Donchian breakout<br/><i>answers: long, short or flat?</i>"]
     end
 
     subgraph RISK["🛡️ Risk layer"]
@@ -54,7 +64,8 @@ flowchart LR
 
     subgraph EXEC["⚙️ Execution layer"]
         PAPER["PaperBroker<br/>(simulation)"]
-        OANDA["OandaBroker<br/>(practice / live)"]
+        OANDA["OandaBroker<br/>(forex, practice / live)"]
+        ALPACA["AlpacaBroker<br/>(crypto, long-only)"]
     end
 
     subgraph ORCH["🎼 Orchestrators"]
@@ -63,25 +74,37 @@ flowchart LR
     end
 
     CSV --> BT
-    FEED --> BOT
+    OFEED --> BOT
+    AFEED --> BOT
     BT --> STRAT
     BOT --> STRAT
     STRAT --> RM
     RM --> PAPER
     RM --> OANDA
+    RM --> ALPACA
     BT -.uses.-> PAPER
     BOT -.uses.-> OANDA
+    BOT -.uses.-> ALPACA
 ```
 
 ### What each layer does
 
 | Layer | Package | Job | Key idea |
 |---|---|---|---|
-| **Data** | `forexbot/data` | Deliver clean OHLC candles from CSV or the OANDA API | Only *completed* candles are ever used — no trading on half-formed bars |
+| **Data** | `forexbot/data` | Deliver clean OHLC candles from CSV, OANDA, or Alpaca | Only *completed* candles are ever used — no trading on half-formed bars |
 | **Strategy** | `forexbot/strategies` | Answer one question per candle: "do I want to be long (+1), short (−1) or flat (0)?" | Strategies are tiny and stateless-ish, so they're easy to test and swap |
 | **Risk** | `forexbot/risk` | Decide *how much* to trade and *whether trading is allowed at all* | Direction comes from the strategy; survival comes from here |
-| **Execution** | `forexbot/execution` | Place/close orders through a common `Broker` interface | The backtester's simulated broker and the real OANDA client are interchangeable |
+| **Execution** | `forexbot/execution` | Place/close orders through a common `Broker` interface | The backtester's simulated broker and the real OANDA/Alpaca clients are interchangeable |
 | **Orchestration** | `forexbot/backtest`, `forexbot/bot.py` | Wire the layers together: replay history (backtest) or run once per candle (live) | The live loop and the backtest loop follow the *same* per-candle sequence |
+
+Alpaca crypto has two hard platform constraints the other layers accommodate
+rather than hide: it **can't short** (a SHORT signal is clamped to FLAT — see
+`long_only` on `BacktestEngine`/`PaperBroker`/`TradingBot`), and it **can't
+bracket an order** (attach stop-loss + take-profit in one call, like OANDA
+does). `AlpacaBroker` covers the gap with a resting stop-loss order (so
+protection survives even if the bot's process dies) plus a take-profit level
+tracked in memory and checked once per cycle — see the docstring in
+`forexbot/execution/alpaca_broker.py` for the full reasoning.
 
 ### One trading cycle (what happens every hour on H1)
 
@@ -89,10 +112,10 @@ flowchart LR
 sequenceDiagram
     participant Clock as ⏰ New candle closes
     participant Bot as TradingBot
-    participant Feed as OANDA data feed
+    participant Feed as Data feed (OANDA/Alpaca)
     participant Strat as Strategy
     participant Risk as RiskManager
-    participant Broker as Broker (OANDA)
+    participant Broker as Broker (OANDA/Alpaca)
 
     Clock->>Bot: wake up (hourly on H1)
     Bot->>Feed: fetch last 300 completed candles
@@ -134,23 +157,25 @@ brakes, and the bot stops itself long before the account is destroyed.
 
 ```
 forexbot/
-├── data/            Candle type, CSV I/O, OANDA candle feed
+├── data/            Candle type, CSV I/O, OANDA + Alpaca candle feeds
 ├── strategies/      base.py (interface) + sma_crossover, rsi_mean_reversion,
 │                    donchian_breakout
 ├── risk/            RiskManager: sizing, stops, daily cap, kill switch
-├── execution/       Broker interface, PaperBroker (sim), OandaBroker (real API)
+├── execution/       Broker interface, PaperBroker (sim), OandaBroker (forex),
+│                    AlpacaBroker (crypto, long-only)
 ├── backtest/        BacktestEngine + metrics + walk-forward validation
 ├── indicators.py    SMA, EMA, RSI, ATR (pure Python, no dependencies)
-├── config.py        YAML config loading (token comes from the environment)
+├── config.py        YAML config loading (secrets come from the environment)
 └── bot.py           The live/paper trading loop
 scripts/
 ├── generate_sample_data.py   synthetic candles so backtests work offline
-├── run_backtest.py           test a strategy on historical data
+├── run_backtest.py           test a strategy on historical data (--long-only for Alpaca)
 ├── run_walkforward.py        the honest test: optimise on past, verify on unseen
-├── download_data.py          fetch real history from OANDA
+├── download_data.py          fetch real history (--broker oanda|alpaca)
 └── run_bot.py                start the (paper) trading bot
-config/config.example.yaml    copy to config/config.yaml and edit
-tests/                        53 unit tests: python -m unittest discover -s tests
+config/config.example.yaml           OANDA (forex) — copy to config/config.yaml and edit
+config/config.example.crypto.yaml    Alpaca (crypto) — copy to config/config.yaml and edit
+tests/                                63 unit tests: python -m unittest discover -s tests
 ```
 
 ---
@@ -229,23 +254,53 @@ saved.
 
 ```bash
 export OANDA_API_TOKEN="paste-your-token-here"
-python scripts/download_data.py --instrument EUR_USD --granularity H1 --days 730
+python scripts/download_data.py --broker oanda --instrument EUR_USD --granularity H1 --days 730
 python scripts/run_backtest.py --data data/EUR_USD_H1.csv --strategy sma_crossover
 ```
+
+### 2b. No OANDA? Trade crypto via Alpaca instead
+
+OANDA isn't available in every country. **Alpaca** is a solid fallback:
+signup is just email + password, with no identity verification required
+for paper trading.
+
+1. Sign up free at [alpaca.markets](https://alpaca.markets/) and generate
+   API keys from the dashboard (no ID upload needed for paper trading).
+2. Download real crypto history and backtest it **with `--long-only`**
+   (Alpaca can't short crypto, so an honest number has to reflect that):
+
+```bash
+export ALPACA_API_KEY_ID="paste-your-key-id-here"
+export ALPACA_API_SECRET_KEY="paste-your-secret-key-here"
+python scripts/download_data.py --broker alpaca --instrument BTC/USD --granularity 1Hour --days 730
+python scripts/run_backtest.py --data data/BTCUSD_1Hour.csv --strategy sma_crossover --long-only
+python scripts/run_walkforward.py --data data/BTCUSD_1Hour.csv \
+    --strategy sma_crossover --grid fast=10,20,30 --grid slow=50,100,200 --long-only
+```
+
+Skip straight to step 3 below, using `config/config.example.crypto.yaml`
+instead of the OANDA one.
 
 ### 3. Paper trade (fake money, real market)
 
 ```bash
+# OANDA (forex):
 cp config/config.example.yaml config/config.yaml
 # edit config/config.yaml: set your oanda.account_id
 export OANDA_API_TOKEN="paste-your-token-here"
+python scripts/run_bot.py
+
+# Alpaca (crypto):
+cp config/config.example.crypto.yaml config/config.yaml
+export ALPACA_API_KEY_ID="paste-your-key-id-here"
+export ALPACA_API_SECRET_KEY="paste-your-secret-key-here"
 python scripts/run_bot.py
 ```
 
 With the default `dry_run: true` the bot only *logs* what it would do —
 watch it for a few days. When the decisions make sense to you, set
 `dry_run: false` and it will trade the practice account for real
-(still fake money).
+(still fake/paper money).
 
 ### 4. Live trading — much later
 
@@ -286,13 +341,13 @@ python scripts/run_backtest.py --data data/EUR_USD_H1.csv --strategy my_strategy
 
 **Roadmap ideas** (roughly in order of value):
 
-1. Multi-pair support (EUR_USD + GBP_USD + USD_JPY) with a portfolio-level
-   risk budget.
+1. Multi-pair/multi-asset support (e.g. EUR_USD + GBP_USD, or BTC/USD +
+   ETH/USD) with a portfolio-level risk budget.
 2. Trade journal: log every decision with the indicator values that caused
    it, so losing streaks can be diagnosed.
 3. Notifications (email/Telegram) when the kill switch fires or a trade opens.
 4. Session filters (skip low-liquidity hours around the New York close /
-   weekend gaps).
+   weekend gaps — forex only, crypto trades 24/7).
 
 ## Glossary (the terms this README uses)
 

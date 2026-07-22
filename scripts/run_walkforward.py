@@ -62,6 +62,8 @@ def main() -> None:
     parser.add_argument("--spread", type=float, default=0.00008)
     parser.add_argument("--risk-per-trade", type=float, default=0.005)
     parser.add_argument("--granularity", default="H1")
+    parser.add_argument("--long-only", action="store_true",
+                        help="reject short signals, matching a venue that can't short (e.g. Alpaca crypto)")
     args = parser.parse_args()
 
     if not args.grid:
@@ -69,7 +71,8 @@ def main() -> None:
 
     candles = load_candles_csv(args.data)
     print(f"data     : {args.data} ({len(candles)} candles)")
-    print(f"strategy : {args.strategy}, selecting by {args.select}")
+    print(f"strategy : {args.strategy}, selecting by {args.select}"
+          + (", long-only" if args.long_only else ""))
     print(f"windows  : train {args.train} / test {args.test} candles\n")
 
     result = run_walk_forward(
@@ -83,6 +86,7 @@ def main() -> None:
         risk_config=RiskConfig(risk_per_trade=args.risk_per_trade),
         selection_metric=args.select,
         granularity=args.granularity,
+        long_only=args.long_only,
     )
 
     print(f"{'fold':<5} {'test period':<26} {'chosen params':<34} {'train%':>8} {'test%':>8} {'trades':>7}")

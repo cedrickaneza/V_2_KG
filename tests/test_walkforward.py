@@ -83,6 +83,16 @@ class TestWalkForward(unittest.TestCase):
             self.assertIn(fold.best_params["fast"], (5, 10))
             self.assertIn(fold.best_params["slow"], (15, 30))
 
+    def test_long_only_threads_through_to_oos_trades(self):
+        # alternating regimes include a downtrend leg where the strategy
+        # wants SHORT; long_only=True must keep every OOS trade non-negative
+        candles = self.make_data(900)
+        result = run_walk_forward(
+            "sma_crossover", {"fast": [5], "slow": [15]}, candles,
+            train_size=300, test_size=150, long_only=True,
+        )
+        self.assertTrue(all(t.units >= 0 for t in result.oos_trades))
+
     def test_invalid_grid_combos_are_skipped(self):
         candles = self.make_data(600)
         # fast=30/slow=15 is invalid (fast >= slow) and must be skipped, not crash

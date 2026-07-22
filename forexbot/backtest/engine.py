@@ -10,6 +10,11 @@ Per-candle sequence (mirrors what the live bot does each cycle):
     3. ask the strategy for its desired stance
     4. if it differs from the held position: close / open with ATR-based
        stop-loss, take-profit, and risk-based position size
+
+Pass ``long_only=True`` when backtesting for a venue that cannot short
+(e.g. Alpaca crypto): a SHORT signal is clamped to FLAT before it ever
+reaches the broker, so the reported performance reflects trades that
+venue could actually place — not a strategy variant it can't execute.
 """
 
 from __future__ import annotations
@@ -22,7 +27,7 @@ from ..data.candles import Candle
 from ..execution.broker import ClosedTrade
 from ..execution.paper_broker import PaperBroker
 from ..risk.manager import RiskManager
-from ..strategies.base import Strategy
+from ..strategies.base import FLAT, Strategy
 from .metrics import compute_metrics
 
 
@@ -43,6 +48,7 @@ class BacktestEngine:
         spread: float = 0.00008,
         lookback: int = 300,
         granularity: str = "H1",
+        long_only: bool = False,
     ):
         self.strategy = strategy
         self.risk = risk
@@ -51,6 +57,7 @@ class BacktestEngine:
         # window of history handed to the strategy each step (keeps runs fast)
         self.lookback = max(lookback, strategy.warmup, risk.config.atr_period + 2)
         self.granularity = granularity
+        self.long_only = long_only
 
     def run(self, candles: Sequence[Candle], instrument: str = "EUR_USD") -> BacktestResult:
         warmup = max(self.strategy.warmup, self.risk.config.atr_period + 2)
@@ -60,7 +67,7 @@ class BacktestEngine:
             )
 
         self.strategy.reset()
-        broker = PaperBroker(self.starting_balance, self.spread)
+        broker = PaperBroker(self.starting_balance, self.spread, long_only=self.long_only)
         result = BacktestResult()
 
         for i in range(warmup, len(candles)):
@@ -72,6 +79,8 @@ class BacktestEngine:
             self.risk.update(candle.time, equity_open)
 
             stance = self.strategy.target_position(window)
+            if self.long_only and stance < 0:
+                stance = FLAT
             pos = broker.get_position(instrument)
             held = 0 if pos is None else (1 if pos.units > 0 else -1)
 

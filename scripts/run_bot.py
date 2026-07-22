@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """Start the trading bot (paper by default).
 
+OANDA (forex):
     cp config/config.example.yaml config/config.yaml   # then edit it
     export OANDA_API_TOKEN="your-token-here"
+    python scripts/run_bot.py --config config/config.yaml
+
+Alpaca (crypto):
+    cp config/config.example.crypto.yaml config/config.yaml   # then edit it
+    export ALPACA_API_KEY_ID="your-key-id"
+    export ALPACA_API_SECRET_KEY="your-secret-key"
     python scripts/run_bot.py --config config/config.yaml
 """
 
@@ -31,10 +38,16 @@ def main() -> None:
 
     setup_logging()
     config = load_config(args.config)
-    if not config.oanda.token:
-        raise SystemExit("Set the OANDA_API_TOKEN environment variable first.")
-    if not config.oanda.account_id:
-        raise SystemExit("Set oanda.account_id in your config file.")
+    if config.broker == "alpaca":
+        if not config.alpaca.api_key_id or not config.alpaca.api_secret_key:
+            raise SystemExit(
+                "Set ALPACA_API_KEY_ID and ALPACA_API_SECRET_KEY environment variables first."
+            )
+    else:
+        if not config.oanda.token:
+            raise SystemExit("Set the OANDA_API_TOKEN environment variable first.")
+        if not config.oanda.account_id:
+            raise SystemExit("Set oanda.account_id in your config file.")
 
     TradingBot(config).run_forever()
 

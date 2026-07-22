@@ -22,7 +22,14 @@ class OandaSettings:
 
 
 @dataclass
+class AlpacaSettings:
+    api_key_id: str = ""
+    api_secret_key: str = ""
+
+
+@dataclass
 class AppConfig:
+    broker: str = "oanda"              # "oanda" (forex) or "alpaca" (crypto, long-only)
     mode: str = "practice"            # "practice" (demo money) or "live"
     dry_run: bool = True              # log orders instead of sending them
     instrument: str = "EUR_USD"
@@ -32,6 +39,7 @@ class AppConfig:
     strategy_params: Dict[str, Any] = field(default_factory=dict)
     risk: RiskConfig = field(default_factory=RiskConfig)
     oanda: OandaSettings = field(default_factory=OandaSettings)
+    alpaca: AlpacaSettings = field(default_factory=AlpacaSettings)
 
 
 def load_config(path: str | Path) -> AppConfig:
@@ -39,6 +47,10 @@ def load_config(path: str | Path) -> AppConfig:
 
     with open(path) as f:
         raw = yaml.safe_load(f) or {}
+
+    broker = str(raw.get("broker", "oanda")).lower()
+    if broker not in ("oanda", "alpaca"):
+        raise ValueError(f"broker must be 'oanda' or 'alpaca', got '{broker}'")
 
     mode = str(raw.get("mode", "practice")).lower()
     if mode not in ("practice", "live"):
@@ -49,6 +61,7 @@ def load_config(path: str | Path) -> AppConfig:
     oanda_raw = raw.get("oanda") or {}
 
     return AppConfig(
+        broker=broker,
         mode=mode,
         dry_run=bool(raw.get("dry_run", True)),
         instrument=str(raw.get("instrument", "EUR_USD")),
@@ -60,5 +73,9 @@ def load_config(path: str | Path) -> AppConfig:
         oanda=OandaSettings(
             account_id=str(oanda_raw.get("account_id", "")),
             token=os.environ.get("OANDA_API_TOKEN", ""),
+        ),
+        alpaca=AlpacaSettings(
+            api_key_id=os.environ.get("ALPACA_API_KEY_ID", ""),
+            api_secret_key=os.environ.get("ALPACA_API_SECRET_KEY", ""),
         ),
     )

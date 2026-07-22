@@ -54,6 +54,19 @@ class TestPaperBroker(unittest.TestCase):
         self.assertEqual(broker.trades[-1].reason, "take_profit")
         self.assertGreater(broker.trades[-1].pnl, 0)
 
+    def test_fractional_units_supported(self):
+        """Crypto-scale sizing (e.g. 0.1 BTC) must not be truncated to zero."""
+        broker = PaperBroker(10_000, spread=0.0)
+        broker.process_candle(self.make_candle(30_000, 30_100, 29_900, 30_050))
+        broker.market_order("BTC/USD", 0.1)
+        self.assertAlmostEqual(broker.position.units, 0.1)
+
+    def test_long_only_rejects_short(self):
+        broker = PaperBroker(10_000, spread=0.0, long_only=True)
+        broker.process_candle(self.make_candle(1.1000, 1.1010, 1.0990, 1.1005))
+        with self.assertRaises(ValueError):
+            broker.market_order("EUR_USD", -10_000)
+
 
 class TestBacktestEngine(unittest.TestCase):
     def run_engine(self, closes, **risk_kwargs):
@@ -82,6 +95,20 @@ class TestBacktestEngine(unittest.TestCase):
     def test_refuses_too_little_data(self):
         with self.assertRaises(ValueError):
             self.run_engine(trend(1.0, 0.0005, 10))
+
+    def test_long_only_clamps_short_signals_to_flat(self):
+        """In a downtrend SmaCrossover wants SHORT; a long_only venue (e.g.
+        Alpaca crypto) can't take that trade, so it must end up flat instead
+        of a broker rejecting an order the engine should never have sent."""
+        closes = trend(1.2, -0.0005, 400)  # steady downtrend -> strategy wants SHORT
+        candles = candles_from_closes(closes, spread=0.0002)
+        strategy = SmaCrossover(fast=5, slow=15)
+        risk = RiskManager(RiskConfig())
+        engine = BacktestEngine(
+            strategy, risk, starting_balance=10_000, spread=0.0001, long_only=True
+        )
+        result = engine.run(candles)
+        self.assertTrue(all(t.units >= 0 for t in result.trades))
 
     def test_all_decisions_use_past_data_only(self):
         """A strategy that records what it saw must never see the candle

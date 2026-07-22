@@ -1,0 +1,43 @@
+# forexbot configuration — Alpaca (crypto)
+# Copy this file to config/config.yaml (which is git-ignored) and edit.
+# Your Alpaca API keys go in ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY
+# environment variables, NEVER in this file.
+#
+# Sign up free at https://alpaca.markets/ (email + password, no identity
+# verification for paper trading) and generate keys under API Keys.
+#
+# IMPORTANT: Alpaca cannot short crypto — the bot automatically treats every
+# SHORT signal as FLAT when broker: alpaca. This is a hard platform fact,
+# not a setting; strategies that rely on shorting will underperform their
+# forex backtests here. Always re-run backtests with --long-only before
+# trusting a number for this venue (see README).
+
+broker: alpaca
+
+# "practice" = Alpaca PAPER trading (fake money, real prices). Start here.
+# "live" additionally requires FOREXBOT_I_UNDERSTAND_LIVE_RISK=yes in the
+# environment — do not touch it until you have months of profitable
+# practice results.
+mode: practice
+
+# When true, the bot logs the orders it WOULD place without sending them.
+dry_run: true
+
+instrument: BTC/USD     # Alpaca's native slash format, e.g. BTC/USD, ETH/USD
+granularity: 1Hour      # Alpaca timeframe string: 1Min, 5Min, 15Min, 30Min, 1Hour, 4Hour, 1Day
+lookback: 300           # candles of history handed to the strategy each cycle
+
+strategy:
+  name: sma_crossover   # or: rsi_mean_reversion / donchian_breakout
+  params:
+    fast: 20
+    slow: 50
+
+risk:
+  risk_per_trade: 0.005        # risk 0.5% of equity per trade (max allowed: 0.02)
+  atr_period: 14
+  atr_stop_multiplier: 2.0     # stop-loss at 2x ATR from entry
+  atr_tp_multiplier: 3.0       # take-profit at 3x ATR (1.5 : 1 reward-to-risk)
+  max_daily_loss_pct: 0.02     # lose 2% in a day -> no new trades until tomorrow
+  max_drawdown_pct: 0.10       # lose 10% from peak -> bot halts entirely
+  max_units: 1                 # crypto units are the COIN itself — 1 = cap at 1 BTC, tune per instrument

@@ -1,7 +1,12 @@
-# forexbot configuration
+# forexbot configuration — OANDA (forex)
 # Copy this file to config/config.yaml (which is git-ignored) and edit.
 # Your OANDA API token goes in the OANDA_API_TOKEN environment variable,
 # NEVER in this file.
+#
+# No OANDA account? See config.example.crypto.yaml for the Alpaca/crypto
+# path instead — it has an easier, no-ID-verification signup.
+
+broker: oanda
 
 # "practice" = OANDA demo account (fake money, real prices). Start here.
 # "live" additionally requires FOREXBOT_I_UNDERSTAND_LIVE_RISK=yes in the
