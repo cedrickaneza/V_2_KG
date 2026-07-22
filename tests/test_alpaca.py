@@ -201,5 +201,79 @@ class TestAlpacaBrokerOrderFlow(unittest.TestCase):
         self.assertIn("/v2/positions/", methods_urls[2][1])
 
 
+class TestAlpacaLimitEntry(unittest.TestCase):
+    """The 'patient buyer': limit at the bid, poll, fall back to market."""
+
+    def make_broker(self, order_states, bid=30_000.0):
+        """order_states: successive JSON payloads returned by GET /v2/orders/{id}."""
+        broker = AlpacaBroker(
+            "key", "secret", paper=True,
+            entry="limit", limit_patience_seconds=10, limit_poll_seconds=3,
+        )
+        # fake clock: no real waiting; each "sleep" advances simulated time,
+        # so with patience 10 and poll 3 the loop polls exactly 3 times
+        clock = {"t": 0.0}
+        broker._monotonic = lambda: clock["t"]
+        broker._sleep = lambda seconds: clock.__setitem__("t", clock["t"] + seconds)
+        self.calls = []
+        self.states = list(order_states)
+
+        def fake_request(method, url, timeout=None, **kwargs):
+            self.calls.append((method, url, kwargs.get("json")))
+            if method == "POST" and "/orders" in url:
+                body = kwargs["json"]
+                return canned_response(payload={"id": f"{body['type']}-1"})
+            if method == "GET" and "/v2/orders/" in url:
+                payload = self.states.pop(0) if self.states else {"status": "canceled", "filled_qty": "0"}
+                return canned_response(payload=payload)
+            if method == "DELETE":
+                return canned_response(status=204, text="")
+            return canned_response()
+
+        broker._session.request = fake_request
+        quote = canned_response(payload={"quotes": {"BTC/USD": {"bp": bid, "ap": bid + 5}}})
+        broker._session.get = MagicMock(return_value=quote)
+        return broker
+
+    def order_types_posted(self):
+        return [j["type"] for m, u, j in self.calls if m == "POST" and j]
+
+    def test_limit_fill_pays_maker_and_places_stop(self):
+        broker = self.make_broker([{"status": "filled", "filled_qty": "0.1"}])
+        broker.market_order("BTC/USD", 0.1, stop_loss=29_000.0)
+        self.assertEqual(self.order_types_posted(), ["limit", "stop"])  # no market order
+        limit_body = next(j for m, _, j in self.calls if m == "POST" and j["type"] == "limit")
+        self.assertEqual(limit_body["limit_price"], "30000.00")
+        self.assertEqual(limit_body["side"], "buy")
+        stop_body = next(j for m, _, j in self.calls if m == "POST" and j["type"] == "stop")
+        self.assertEqual(stop_body["qty"], "0.1")
+
+    def test_unfilled_limit_falls_back_to_market(self):
+        # every poll says still working; after patience -> cancel -> market
+        pending = [{"status": "new", "filled_qty": "0"}] * 10
+        broker = self.make_broker(pending)
+        broker.market_order("BTC/USD", 0.1, stop_loss=29_000.0)
+        self.assertEqual(self.order_types_posted(), ["limit", "market", "stop"])
+        cancels = [u for m, u, _ in self.calls if m == "DELETE"]
+        self.assertTrue(any("/v2/orders/limit-1" in u for u in cancels))
+
+    def test_partial_fill_keeps_partial_and_sizes_stop_to_it(self):
+        # unfilled during polling, but the post-cancel check reveals a partial
+        pending = [{"status": "new", "filled_qty": "0"}] * 3
+        final = [{"status": "canceled", "filled_qty": "0.04"}]
+        broker = self.make_broker(pending + final)
+        broker.market_order("BTC/USD", 0.1, stop_loss=29_000.0)
+        types = self.order_types_posted()
+        self.assertNotIn("market", types)  # partial accepted, remainder NOT chased
+        stop_body = next(j for m, _, j in self.calls if m == "POST" and j["type"] == "stop")
+        self.assertEqual(stop_body["qty"], "0.04")
+
+    def test_no_quote_available_goes_straight_to_market(self):
+        broker = self.make_broker([])
+        broker._session.get = MagicMock(return_value=canned_response(payload={"quotes": {}}))
+        broker.market_order("BTC/USD", 0.1, stop_loss=29_000.0)
+        self.assertEqual(self.order_types_posted(), ["market", "stop"])
+
+
 if __name__ == "__main__":
     unittest.main()

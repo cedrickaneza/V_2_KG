@@ -1,11 +1,17 @@
 """Live/paper trading loop.
 
-Once per candle (e.g. every hour on H1) the bot:
-    1. fetches the latest completed candles from OANDA
-    2. updates the risk manager with current account equity
-    3. asks the strategy for its desired stance (+1 / -1 / 0)
-    4. reconciles: closes/opens positions so reality matches the stance,
-       with an ATR stop-loss, take-profit and risk-based size attached
+Once per candle (e.g. every hour on H1, once a day on 1Day) the bot:
+    1. updates the risk manager with current account equity (once)
+    2. then, for EACH configured instrument:
+       a. fetches the latest completed candles
+       b. asks that instrument's own strategy for its stance (+1 / -1 / 0)
+       c. reconciles: closes/opens positions so reality matches the stance,
+          with an ATR stop-loss, take-profit and risk-based size attached
+
+Each instrument gets its OWN strategy instance because strategies may keep
+internal state; sharing one instance across instruments would tangle their
+signals. The risk manager is shared on purpose: daily-loss and drawdown
+limits protect the ACCOUNT, not any single market.
 
 Safety defaults:
     * dry_run: true  -> orders are logged, never sent
@@ -68,7 +74,11 @@ class TradingBot:
                 "risk, set FOREXBOT_I_UNDERSTAND_LIVE_RISK=yes and restart."
             )
 
-        self.strategy = build_strategy(config.strategy_name, config.strategy_params)
+        # one strategy instance PER instrument — strategies carry state
+        self.strategies = {
+            instrument: build_strategy(config.strategy_name, config.strategy_params)
+            for instrument in config.instruments
+        }
         self.risk = RiskManager(config.risk)
 
         if config.broker == "alpaca":
@@ -76,7 +86,10 @@ class TradingBot:
                 config.alpaca.api_key_id, config.alpaca.api_secret_key
             )
             self.broker = AlpacaBroker(
-                config.alpaca.api_key_id, config.alpaca.api_secret_key, paper=practice
+                config.alpaca.api_key_id,
+                config.alpaca.api_secret_key,
+                paper=practice,
+                entry=config.alpaca.entry,
             )
             self.granularity_seconds = ALPACA_GRANULARITY_SECONDS[config.granularity]
         else:
@@ -98,64 +111,62 @@ class TradingBot:
     # -- one trading cycle ----------------------------------------------------
 
     def run_cycle(self) -> None:
-        cfg = self.config
-        candles = self.feed.get_candles(
-            cfg.instrument, cfg.granularity, count=cfg.lookback
-        )
-        if len(candles) < self.strategy.warmup:
-            log.warning(
-                "only %d candles available, need %d — skipping cycle",
-                len(candles),
-                self.strategy.warmup,
-            )
-            return
-
         equity = self.broker.get_equity()
-        now = datetime.now(timezone.utc)
-        self.risk.update(now, equity)
-
-        stance = self.strategy.target_position(candles)
-        if self.long_only and stance < 0:
-            stance = FLAT
-        pos = self.broker.get_position(cfg.instrument)
-        held = 0 if pos is None else (1 if pos.units > 0 else -1)
-        last_close = candles[-1].close
-
-        log.info(
-            "cycle: equity=%.2f price=%.5f stance=%+d held=%+d %s",
-            equity,
-            last_close,
-            stance,
-            held,
-            "(DRY RUN)" if cfg.dry_run else "",
-        )
+        self.risk.update(datetime.now(timezone.utc), equity)
 
         if self.risk.halted:
             log.error("KILL SWITCH ACTIVE: %s — no trading", self.risk.halt_reason)
             return
 
+        for instrument in self.config.instruments:
+            try:
+                self._run_instrument(instrument, equity)
+            except Exception:
+                log.exception("cycle failed for %s; continuing with the rest", instrument)
+
+    def _run_instrument(self, instrument: str, equity: float) -> None:
+        cfg = self.config
+        strategy = self.strategies[instrument]
+
+        candles = self.feed.get_candles(instrument, cfg.granularity, count=cfg.lookback)
+        if len(candles) < strategy.warmup:
+            log.warning(
+                "%s: only %d candles available, need %d — skipping",
+                instrument, len(candles), strategy.warmup,
+            )
+            return
+
+        stance = strategy.target_position(candles)
+        if self.long_only and stance < 0:
+            stance = FLAT
+        pos = self.broker.get_position(instrument)
+        held = 0 if pos is None else (1 if pos.units > 0 else -1)
+        last_close = candles[-1].close
+
+        log.info(
+            "%s: equity=%.2f price=%.5f stance=%+d held=%+d %s",
+            instrument, equity, last_close, stance, held,
+            "(DRY RUN)" if cfg.dry_run else "",
+        )
+
         # brokers that can't bracket an order (e.g. Alpaca crypto) track
-        # take-profit here instead of on the exchange — see bot.py's module
+        # take-profit here instead of on the exchange — see the module
         # docstring and alpaca_broker.py for why this is a deliberate,
         # disclosed simplification rather than a broker-enforced exit.
         get_take_profit = getattr(self.broker, "get_take_profit", None)
         if pos is not None and get_take_profit is not None:
-            tp = get_take_profit(cfg.instrument)
+            tp = get_take_profit(instrument)
             crossed = tp is not None and (
                 (pos.units > 0 and last_close >= tp) or (pos.units < 0 and last_close <= tp)
             )
             if crossed:
                 if cfg.dry_run:
-                    log.info(
-                        "[dry-run] would close %+g units of %s (take-profit reached)",
-                        pos.units, cfg.instrument,
-                    )
+                    log.info("[dry-run] would close %+g units of %s (take-profit reached)",
+                             pos.units, instrument)
                 else:
-                    self.broker.close_position(cfg.instrument, reason="take_profit")
-                    log.info(
-                        "closed %+g units of %s (take-profit reached)",
-                        pos.units, cfg.instrument,
-                    )
+                    self.broker.close_position(instrument, reason="take_profit")
+                    log.info("closed %+g units of %s (take-profit reached)",
+                             pos.units, instrument)
                 return
 
         if stance == held:
@@ -163,26 +174,27 @@ class TradingBot:
 
         if pos is not None:
             if cfg.dry_run:
-                log.info("[dry-run] would close %+g units of %s", pos.units, cfg.instrument)
+                log.info("[dry-run] would close %+g units of %s", pos.units, instrument)
             else:
-                self.broker.close_position(cfg.instrument)
-                log.info("closed %+g units of %s", pos.units, cfg.instrument)
+                self.broker.close_position(instrument)
+                log.info("closed %+g units of %s", pos.units, instrument)
 
         if stance == 0:
             return
 
         allowed, reason = self.risk.can_open_trade(equity)
         if not allowed:
-            log.warning("entry blocked by risk manager: %s", reason)
+            log.warning("%s: entry blocked by risk manager: %s", instrument, reason)
             return
 
         stop_dist = self.risk.stop_distance(candles)
         if not stop_dist:
-            log.warning("no ATR available yet — skipping entry")
+            log.warning("%s: no ATR available yet — skipping entry", instrument)
             return
         units = self.risk.position_size(equity, stop_dist) * stance
         if units == 0:
-            log.warning("position size rounded to 0 — equity too small for this stop")
+            log.warning("%s: position size rounded to 0 — equity too small for this stop",
+                        instrument)
             return
 
         tp_dist = self.risk.take_profit_distance(stop_dist)
@@ -192,22 +204,21 @@ class TradingBot:
             sl, tp = last_close + stop_dist, last_close - tp_dist
 
         if cfg.dry_run:
-            log.info(
-                "[dry-run] would open %+g units of %s (SL=%.5f TP=%.5f)",
-                units, cfg.instrument, sl, tp,
-            )
+            log.info("[dry-run] would open %+g units of %s (SL=%.5f TP=%.5f)",
+                     units, instrument, sl, tp)
         else:
-            self.broker.market_order(cfg.instrument, units, stop_loss=sl, take_profit=tp)
-            log.info("opened %+g units of %s (SL=%.5f TP=%.5f)", units, cfg.instrument, sl, tp)
+            self.broker.market_order(instrument, units, stop_loss=sl, take_profit=tp)
+            log.info("opened %+g units of %s (SL=%.5f TP=%.5f)", units, instrument, sl, tp)
 
     # -- main loop -----------------------------------------------------------
 
     def run_forever(self) -> None:
         cfg = self.config
+        strategy_desc = next(iter(self.strategies.values())).describe()
         log.info("=" * 60)
         log.info(
             "forexbot starting: %s %s %s mode=%s dry_run=%s",
-            cfg.instrument, cfg.granularity, self.strategy.describe(),
+            ", ".join(cfg.instruments), cfg.granularity, strategy_desc,
             cfg.mode.upper(), cfg.dry_run,
         )
         log.info(

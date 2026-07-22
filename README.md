@@ -106,6 +106,18 @@ protection survives even if the bot's process dies) plus a take-profit level
 tracked in memory and checked once per cycle — see the docstring in
 `forexbot/execution/alpaca_broker.py` for the full reasoning.
 
+Two features that came out of real-data testing (see `docs/research-log.md`):
+
+* **Cheaper "maker" entries** (`alpaca.entry: limit` in the config, the
+  default): instead of buying instantly at the taker fee (~0.25%), the bot
+  rests a buy order at the current bid for up to two minutes — filled
+  resting orders pay the cheaper maker fee (≤0.15%) — then falls back to a
+  market order so a signal is never dropped. The protective stop is placed
+  after the entry fills, sized to what actually filled.
+* **Multiple instruments** (`instruments:` list in the config): each gets
+  its own strategy instance; the risk manager stays account-wide, so the
+  daily-loss cap and kill switch protect the whole account, not one market.
+
 ### One trading cycle (what happens every hour on H1)
 
 ```mermaid
@@ -175,7 +187,8 @@ scripts/
 └── run_bot.py                start the (paper) trading bot
 config/config.example.yaml           OANDA (forex) — copy to config/config.yaml and edit
 config/config.example.crypto.yaml    Alpaca (crypto) — copy to config/config.yaml and edit
-tests/                                63 unit tests: python -m unittest discover -s tests
+docs/research-log.md                  every idea tested, every verdict — including discards
+tests/                                81 unit tests: python -m unittest discover -s tests
 ```
 
 ---
@@ -272,11 +285,19 @@ for paper trading.
 ```bash
 export ALPACA_API_KEY_ID="paste-your-key-id-here"
 export ALPACA_API_SECRET_KEY="paste-your-secret-key-here"
-python scripts/download_data.py --broker alpaca --instrument BTC/USD --granularity 1Hour --days 730
-python scripts/run_backtest.py --data data/BTCUSD_1Hour.csv --strategy sma_crossover --long-only
-python scripts/run_walkforward.py --data data/BTCUSD_1Hour.csv \
-    --strategy sma_crossover --grid fast=10,20,30 --grid slow=50,100,200 --long-only
+python scripts/download_data.py --broker alpaca --instrument BTC/USD --granularity 1Day --days 2200
+python scripts/run_backtest.py --data data/BTCUSD_1Day.csv --strategy donchian_breakout \
+    --long-only --spread-pct 0.005 --granularity 1Day
+python scripts/run_walkforward.py --data data/BTCUSD_1Day.csv \
+    --strategy donchian_breakout --grid entry_period=20,55,100 --grid exit_period=10,20 \
+    --long-only --spread-pct 0.005 --granularity 1Day
 ```
+
+`--spread-pct 0.005` charges 0.5% of the trade's value per round trip —
+Alpaca's real fee structure. `--long-only` because Alpaca can't short
+crypto. Testing without both flags produces numbers a crypto account can't
+actually earn. (Why daily bars? See `docs/research-log.md`: at these fees,
+hourly trading loses on fee drag alone.)
 
 Skip straight to step 3 below, using `config/config.example.crypto.yaml`
 instead of the OANDA one.

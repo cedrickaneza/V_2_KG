@@ -26,13 +26,27 @@ Two hard platform constraints shape this class, both different from OANDA:
          resting orders (stop + limit) that would need manual OCO
          reconciliation. Call ``get_take_profit`` each cycle to check it.
 
+Entry styles (``entry=`` constructor arg):
+    * ``"market"`` — buy instantly at whatever the market asks. Simple, but
+      always pays Alpaca's highest ("taker") fee, ~0.25% of the trade.
+    * ``"limit"`` — the patient buyer: rest a buy order at the current best
+      bid, poll for up to ``limit_patience_seconds``; a resting order that
+      gets filled pays the cheaper "maker" fee (≤0.15%). If it doesn't fill
+      in time, cancel and fall back to a market order, so a trade signal is
+      never silently dropped. The protective stop is placed only AFTER the
+      entry actually fills (a stop-sell can't exist without a position on a
+      venue with no shorting), sized to the quantity that really filled —
+      which also handles partial fills.
+
 Only a small slice of the v2 API is used:
     GET    /v2/account                    -> equity
     GET    /v2/positions/{symbol}         -> current position (404 = none)
     GET    /v2/orders?status=open         -> find orphaned resting orders
-    POST   /v2/orders                     -> market or stop order
+    GET    /v2/orders/{id}                -> poll a limit entry's fill status
+    POST   /v2/orders                     -> market, limit or stop order
     DELETE /v2/orders/{id}                -> cancel a resting order
     DELETE /v2/positions/{symbol}         -> liquidate a position
+plus the latest-quote endpoint on the market-data host for the bid price.
 
 Known, accepted gaps (paper-trading grade, not production grade):
 * if the entry fills but the follow-up stop order submission fails, the
@@ -44,6 +58,7 @@ Known, accepted gaps (paper-trading grade, not production grade):
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -55,6 +70,9 @@ from .broker import Broker, Position
 
 PAPER_HOST = "https://paper-api.alpaca.markets"
 LIVE_HOST = "https://api.alpaca.markets"
+DATA_HOST = "https://data.alpaca.markets"
+
+log = logging.getLogger("forexbot")
 
 
 class AlpacaError(RuntimeError):
@@ -67,19 +85,42 @@ def format_qty(units: float) -> str:
     return text or "0"
 
 
+def format_limit_price(price: float) -> str:
+    """Sensible decimal places across coin price scales (BTC 60000 vs DOGE 0.12)."""
+    if price >= 100:
+        return f"{price:.2f}"
+    if price >= 1:
+        return f"{price:.4f}"
+    return f"{price:.6f}"
+
+
 class AlpacaBroker(Broker):
     long_only = True  # crypto cannot be shorted on Alpaca — not configurable
 
     def __init__(
-        self, api_key_id: str, api_secret_key: str, paper: bool = True, timeout: float = 15.0
+        self,
+        api_key_id: str,
+        api_secret_key: str,
+        paper: bool = True,
+        timeout: float = 15.0,
+        entry: str = "market",
+        limit_patience_seconds: float = 120.0,
+        limit_poll_seconds: float = 3.0,
     ):
         if not api_key_id or not api_secret_key:
             raise AlpacaError(
                 "Alpaca API key id and secret are required "
                 "(env vars ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY)"
             )
+        if entry not in ("market", "limit"):
+            raise AlpacaError(f"entry must be 'market' or 'limit', got '{entry}'")
         self.paper = paper
         self.timeout = timeout
+        self.entry = entry
+        self.limit_patience_seconds = limit_patience_seconds
+        self.limit_poll_seconds = limit_poll_seconds
+        self._sleep = time.sleep          # replaceable in tests
+        self._monotonic = time.monotonic  # replaceable in tests
         self._session = requests.Session()
         self._session.headers.update(
             {"APCA-API-KEY-ID": api_key_id, "APCA-API-SECRET-KEY": api_secret_key}
@@ -159,6 +200,36 @@ class AlpacaBroker(Broker):
         if qty_str == "0":
             return
 
+        if self.entry == "limit":
+            filled_qty = self._limit_entry_with_fallback(instrument, qty_str, units)
+        else:
+            self._submit_market_buy(instrument, qty_str)
+            filled_qty = units
+
+        if filled_qty <= 0:
+            log.warning("%s: entry did not fill at all — no position, no stop", instrument)
+            return
+
+        # protective stop sized to what actually filled (handles partials)
+        if stop_loss is not None:
+            stop_data = self._request(
+                "POST",
+                "/v2/orders",
+                json={
+                    "symbol": instrument,
+                    "qty": format_qty(filled_qty),
+                    "side": "sell",
+                    "type": "stop",
+                    "stop_price": f"{stop_loss:.8f}",
+                    "time_in_force": "gtc",
+                },
+            )
+            self._stop_order_ids[instrument] = stop_data["id"]
+
+        if take_profit is not None:
+            self._take_profits[instrument] = take_profit
+
+    def _submit_market_buy(self, instrument: str, qty_str: str) -> None:
         self._request(
             "POST",
             "/v2/orders",
@@ -171,23 +242,73 @@ class AlpacaBroker(Broker):
             },
         )
 
-        if stop_loss is not None:
-            stop_data = self._request(
-                "POST",
-                "/v2/orders",
-                json={
-                    "symbol": instrument,
-                    "qty": qty_str,
-                    "side": "sell",
-                    "type": "stop",
-                    "stop_price": f"{stop_loss:.8f}",
-                    "time_in_force": "gtc",
-                },
-            )
-            self._stop_order_ids[instrument] = stop_data["id"]
+    def _limit_entry_with_fallback(
+        self, instrument: str, qty_str: str, units: float
+    ) -> float:
+        """Try to enter as a maker (limit at the best bid); fall back to a
+        market order if unfilled within the patience window. Returns the
+        quantity actually acquired."""
+        bid = self._latest_bid(instrument)
+        if bid is None or bid <= 0:
+            log.warning("%s: no bid quote available — using market entry", instrument)
+            self._submit_market_buy(instrument, qty_str)
+            return units
 
-        if take_profit is not None:
-            self._take_profits[instrument] = take_profit
+        order = self._request(
+            "POST",
+            "/v2/orders",
+            json={
+                "symbol": instrument,
+                "qty": qty_str,
+                "side": "buy",
+                "type": "limit",
+                "limit_price": format_limit_price(bid),
+                "time_in_force": "gtc",
+            },
+        )
+        order_id = order["id"]
+
+        deadline = self._monotonic() + self.limit_patience_seconds
+        while True:
+            self._sleep(self.limit_poll_seconds)
+            if self._monotonic() >= deadline:
+                break  # patience over; the post-cancel check below catches late fills
+            state = self._request("GET", f"/v2/orders/{order_id}", allow_404=True)
+            if state and state.get("status") == "filled":
+                log.info("%s: limit entry filled as maker at %s", instrument, format_limit_price(bid))
+                return float(state.get("filled_qty") or units)
+
+        # patience exhausted: cancel, then look at the FINAL state — the
+        # order may have filled (fully or partly) in the race with the cancel
+        self._request("DELETE", f"/v2/orders/{order_id}", allow_404=True)
+        state = self._request("GET", f"/v2/orders/{order_id}", allow_404=True)
+        already = float((state or {}).get("filled_qty") or 0)
+        if already > 0:
+            log.info(
+                "%s: limit entry filled %s of %s before cancel — keeping the partial",
+                instrument, format_qty(already), qty_str,
+            )
+            return already
+
+        log.info("%s: limit entry unfilled after %.0fs — falling back to market",
+                 instrument, self.limit_patience_seconds)
+        self._submit_market_buy(instrument, qty_str)
+        return units
+
+    def _latest_bid(self, instrument: str) -> Optional[float]:
+        """Best bid from the market-data host (different host than trading)."""
+        try:
+            resp = self._session.get(
+                f"{DATA_HOST}/v1beta3/crypto/us/latest/quotes",
+                params={"symbols": instrument},
+                timeout=self.timeout,
+            )
+            if resp.status_code >= 400:
+                return None
+            quote_data = resp.json().get("quotes", {}).get(instrument, {})
+            return float(quote_data.get("bp") or 0) or None
+        except (requests.ConnectionError, requests.Timeout, ValueError):
+            return None
 
     def close_position(self, instrument: str, reason: str = "signal") -> None:
         self._cancel_resting_stop(instrument)

@@ -8,9 +8,12 @@
 #
 # IMPORTANT: Alpaca cannot short crypto — the bot automatically treats every
 # SHORT signal as FLAT when broker: alpaca. This is a hard platform fact,
-# not a setting; strategies that rely on shorting will underperform their
-# forex backtests here. Always re-run backtests with --long-only before
-# trusting a number for this venue (see README).
+# not a setting. Always re-run backtests with --long-only before trusting a
+# number for this venue, and use --spread-pct 0.005 so fees are honest.
+#
+# The defaults below follow the findings in docs/research-log.md:
+# DAILY bars (hourly trading dies to fees), trend-following strategies,
+# and both BTC and ETH for more chances to catch a trend.
 
 broker: alpaca
 
@@ -23,15 +26,17 @@ mode: practice
 # When true, the bot logs the orders it WOULD place without sending them.
 dry_run: true
 
-instrument: BTC/USD     # Alpaca's native slash format, e.g. BTC/USD, ETH/USD
-granularity: 1Hour      # Alpaca timeframe string: 1Min, 5Min, 15Min, 30Min, 1Hour, 4Hour, 1Day
+instruments:            # each instrument gets its own strategy instance
+  - BTC/USD
+  - ETH/USD
+granularity: 1Day       # the timeframe that survived fee-honest testing
 lookback: 300           # candles of history handed to the strategy each cycle
 
 strategy:
-  name: sma_crossover   # or: rsi_mean_reversion / donchian_breakout
+  name: donchian_breakout   # best out-of-sample result so far; or: sma_crossover
   params:
-    fast: 20
-    slow: 50
+    entry_period: 55
+    exit_period: 20
 
 risk:
   risk_per_trade: 0.005        # risk 0.5% of equity per trade (max allowed: 0.02)
@@ -41,3 +46,9 @@ risk:
   max_daily_loss_pct: 0.02     # lose 2% in a day -> no new trades until tomorrow
   max_drawdown_pct: 0.10       # lose 10% from peak -> bot halts entirely
   max_units: 1                 # crypto units are the COIN itself — 1 = cap at 1 BTC, tune per instrument
+
+alpaca:
+  # "limit" = the patient buyer: rest at the bid for up to 2 minutes to pay
+  # Alpaca's cheaper maker fee, then fall back to a market order so no
+  # signal is ever dropped. "market" = always instant, always taker fee.
+  entry: limit
