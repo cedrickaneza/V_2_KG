@@ -7,6 +7,41 @@ real money. Append new entries at the top.
 
 ---
 
+## 2026-07-22 (later) — Daily bars, 5.5 years: first faint pulse — KEEP RESEARCHING
+
+**Setup.** 2,028 daily BTC/USD bars (2021-01-01 → 2026-07-21). Walk-forward
+train 600 / test 150 (≈9 folds, ~3.9 years out-of-sample), long-only,
+`--spread-pct 0.005` (fees as a true percentage — new engine feature added
+for this test, since price ranged $8k→$126k and any fixed-dollar fee would
+be wrong at one end).
+
+**Out-of-sample results:**
+
+| Strategy | OOS total | Trades | Profit factor | Max DD | Sharpe |
+|---|---|---|---|---|---|
+| SMA crossover | **+4.8%** | 71 | 1.29 | 4.3% | 0.44 |
+| Donchian breakout | +2.2% | 57 | 1.15 | 6.0% | 0.23 |
+| RSI mean-reversion | +1.1% | 22 | 1.26 | 2.9% | 0.24 |
+
+**Reading, honestly.**
+- First test in the entire project where every configuration is positive
+  out-of-sample, and train ≈ test (no curve-fit signature). Daily bars
+  cut fee drag enough for the multi-year trendiness of BTC to show through.
+- It is a *faint* pulse, not an edge worth money yet: ≈ +1.2%/year at the
+  bot's very cautious sizing (0.5% risk/trade — max drawdown was only
+  4.3%, so the bot was barely betting). Sharpe < 0.5 and ~71 trades is
+  thin evidence; this could still be luck.
+- Conclusion: the daily-timeframe, trend-following, fee-aware region is
+  where further research should focus. Hourly is dead on arrival at these
+  fees (see entry below).
+
+**Next tests, in order:** (1) same daily walk-forward on ETH/USD — if the
+result repeats on a second asset it's much less likely to be luck;
+(2) maker/limit execution to cut fees toward 0.15%/side; (3) fee-aware
+entry filter.
+
+---
+
 ## 2026-07-22 — All three starter strategies on BTC/USD (Alpaca): DISCARD
 
 **Setup.** 2 years of real BTC/USD from Alpaca (2024-07-22 → 2026-07-22,

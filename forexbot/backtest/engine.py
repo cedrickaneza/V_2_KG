@@ -49,11 +49,13 @@ class BacktestEngine:
         lookback: int = 300,
         granularity: str = "H1",
         long_only: bool = False,
+        spread_pct: float = 0.0,
     ):
         self.strategy = strategy
         self.risk = risk
         self.starting_balance = starting_balance
         self.spread = spread
+        self.spread_pct = spread_pct
         # window of history handed to the strategy each step (keeps runs fast)
         self.lookback = max(lookback, strategy.warmup, risk.config.atr_period + 2)
         self.granularity = granularity
@@ -67,7 +69,10 @@ class BacktestEngine:
             )
 
         self.strategy.reset()
-        broker = PaperBroker(self.starting_balance, self.spread, long_only=self.long_only)
+        broker = PaperBroker(
+            self.starting_balance, self.spread,
+            long_only=self.long_only, spread_pct=self.spread_pct,
+        )
         result = BacktestResult()
 
         for i in range(warmup, len(candles)):

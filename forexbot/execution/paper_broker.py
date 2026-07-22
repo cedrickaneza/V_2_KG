@@ -30,14 +30,28 @@ class PaperBroker(Broker):
         starting_balance: float = 10_000.0,
         spread: float = 0.00008,
         long_only: bool = False,
+        spread_pct: float = 0.0,
     ):
+        """`spread` is a FIXED price-unit cost per round trip (forex style,
+        where the bid/ask gap is roughly constant in price terms).
+        `spread_pct` is a PROPORTIONAL cost per round trip (crypto style,
+        where fees are a percentage of the trade — e.g. 0.005 models
+        Alpaca's ~0.25%/side taker fee). When spread_pct > 0 it takes
+        precedence; essential for data whose price varies by multiples,
+        where any fixed dollar figure is wrong at one end of the range."""
         self.starting_balance = starting_balance
         self.balance = starting_balance          # realised cash
         self.spread = spread
+        self.spread_pct = spread_pct
         self.long_only = long_only
         self.position: Optional[Position] = None
         self.trades: List[ClosedTrade] = []
         self._candle: Optional[Candle] = None    # the candle currently being simulated
+
+    def _half_cost(self, price: float) -> float:
+        if self.spread_pct > 0:
+            return price * self.spread_pct / 2
+        return self.spread / 2
 
     # -- simulation clock -------------------------------------------------
 
@@ -99,7 +113,7 @@ class PaperBroker(Broker):
             )
         if self.position is not None:
             raise RuntimeError("PaperBroker holds one position at a time; close it first")
-        half = self.spread / 2
+        half = self._half_cost(self._candle.open)
         fill = self._candle.open + half if units > 0 else self._candle.open - half
         self.position = Position(
             instrument=instrument,
@@ -115,7 +129,7 @@ class PaperBroker(Broker):
             return
         if self._candle is None:
             raise RuntimeError("no current candle to price the close against")
-        half = self.spread / 2
+        half = self._half_cost(self._candle.open)
         # closing a long means selling (receive open - half); closing a short means buying
         price = (
             self._candle.open - half

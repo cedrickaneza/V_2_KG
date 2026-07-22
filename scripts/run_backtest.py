@@ -49,6 +49,9 @@ def main() -> None:
                         help="strategy parameter, repeatable (e.g. --param fast=10)")
     parser.add_argument("--balance", type=float, default=10_000.0, help="starting balance")
     parser.add_argument("--spread", type=float, default=0.00008, help="bid/ask spread in price units")
+    parser.add_argument("--spread-pct", type=float, default=0.0,
+                        help="round-trip cost as a FRACTION of price (crypto fees; "
+                             "e.g. 0.005 = 0.5%% round trip). Overrides --spread when set")
     parser.add_argument("--risk-per-trade", type=float, default=0.005)
     parser.add_argument("--granularity", default="H1", help="candle size of the data (for Sharpe annualisation)")
     parser.add_argument("--equity-out", help="optional CSV path to save the equity curve")
@@ -65,12 +68,15 @@ def main() -> None:
         spread=args.spread,
         granularity=args.granularity,
         long_only=args.long_only,
+        spread_pct=args.spread_pct,
     )
 
+    cost = (f"{args.spread_pct:.3%} of price per round trip"
+            if args.spread_pct else f"spread {args.spread}")
     print(f"data      : {args.data} ({len(candles)} candles, "
           f"{candles[0].time:%Y-%m-%d} .. {candles[-1].time:%Y-%m-%d})")
     print(f"strategy  : {strategy.describe()}")
-    print(f"risk      : {args.risk_per_trade:.2%} per trade, spread {args.spread}"
+    print(f"risk      : {args.risk_per_trade:.2%} per trade, {cost}"
           + (", long-only" if args.long_only else ""))
     print()
 

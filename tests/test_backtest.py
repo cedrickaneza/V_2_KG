@@ -61,6 +61,28 @@ class TestPaperBroker(unittest.TestCase):
         broker.market_order("BTC/USD", 0.1)
         self.assertAlmostEqual(broker.position.units, 0.1)
 
+    def test_percentage_cost_round_trip(self):
+        """With spread_pct, a round trip costs that fraction of the trade's
+        value — the crypto fee model, correct at any price level."""
+        broker = PaperBroker(10_000, spread_pct=0.005)  # 0.5% round trip
+        broker.process_candle(self.make_candle(50_000, 50_100, 49_900, 50_000))
+        broker.market_order("BTC/USD", 0.1)
+        broker.process_candle(self.make_candle(50_000, 50_100, 49_900, 50_000, hours=1))
+        broker.close_position("BTC/USD")
+        # price unchanged -> loss == 0.5% of (0.1 units x 50_000)
+        self.assertAlmostEqual(broker.balance, 10_000 - 0.005 * 0.1 * 50_000)
+
+    def test_percentage_cost_scales_with_price(self):
+        """The whole point of spread_pct: the same trade costs proportionally
+        the same at a 10k price as at a 100k price."""
+        for price in (10_000, 100_000):
+            broker = PaperBroker(10_000, spread_pct=0.005)
+            broker.process_candle(self.make_candle(price, price, price, price))
+            broker.market_order("BTC/USD", 1.0)
+            broker.process_candle(self.make_candle(price, price, price, price, hours=1))
+            broker.close_position("BTC/USD")
+            self.assertAlmostEqual(broker.balance, 10_000 - 0.005 * price)
+
     def test_long_only_rejects_short(self):
         broker = PaperBroker(10_000, spread=0.0, long_only=True)
         broker.process_candle(self.make_candle(1.1000, 1.1010, 1.0990, 1.1005))

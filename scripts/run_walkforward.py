@@ -60,6 +60,9 @@ def main() -> None:
                         help="metric used to pick parameters on each train window")
     parser.add_argument("--balance", type=float, default=10_000.0)
     parser.add_argument("--spread", type=float, default=0.00008)
+    parser.add_argument("--spread-pct", type=float, default=0.0,
+                        help="round-trip cost as a FRACTION of price (crypto fees; "
+                             "e.g. 0.005 = 0.5%% round trip). Overrides --spread when set")
     parser.add_argument("--risk-per-trade", type=float, default=0.005)
     parser.add_argument("--granularity", default="H1")
     parser.add_argument("--long-only", action="store_true",
@@ -87,6 +90,7 @@ def main() -> None:
         selection_metric=args.select,
         granularity=args.granularity,
         long_only=args.long_only,
+        spread_pct=args.spread_pct,
     )
 
     print(f"{'fold':<5} {'test period':<26} {'chosen params':<34} {'train%':>8} {'test%':>8} {'trades':>7}")

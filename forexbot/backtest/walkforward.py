@@ -87,6 +87,7 @@ def run_walk_forward(
     selection_metric: str = "net_profit",   # or "sharpe" / "profit_factor"
     granularity: str = "H1",
     long_only: bool = False,
+    spread_pct: float = 0.0,
 ) -> WalkForwardResult:
     risk_config = risk_config or RiskConfig()
 
@@ -123,6 +124,7 @@ def run_walk_forward(
                 spread=spread,
                 granularity=granularity,
                 long_only=long_only,
+                spread_pct=spread_pct,
             )
             try:
                 m = engine.run(train).metrics
@@ -144,6 +146,7 @@ def run_walk_forward(
             spread=spread,
             granularity=granularity,
             long_only=long_only,
+            spread_pct=spread_pct,
         )
         # prefix the test window with exactly the warmup the engine needs,
         # so indicators are ready and trading starts at the first test candle
