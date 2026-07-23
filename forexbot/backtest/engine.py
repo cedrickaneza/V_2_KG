@@ -100,7 +100,7 @@ class BacktestEngine:
                         stop_dist = self.risk.stop_distance(window)
                         if stop_dist:
                             units = self.risk.position_size(
-                                broker.equity(candle.open), stop_dist
+                                broker.equity(candle.open), stop_dist, price=candle.open
                             )
                             if units > 0:
                                 tp_dist = self.risk.take_profit_distance(stop_dist)

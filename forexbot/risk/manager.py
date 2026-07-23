@@ -37,7 +37,8 @@ class RiskConfig:
     atr_tp_multiplier: float = 3.0     # take-profit distance = 3 x ATR (1.5:1 reward:risk)
     max_daily_loss_pct: float = 0.02   # stop opening trades after losing 2% in a day
     max_drawdown_pct: float = 0.10     # kill switch: halt for good at -10% from peak
-    max_units: float = 100_000         # hard cap on position size (1 standard lot; set much lower for crypto)
+    max_position_pct: float = 0.25     # cap any one position at 25% of account value
+    max_units: float = 100_000         # absolute backstop on unit count (rarely binding)
 
     def __post_init__(self) -> None:
         if not 0 < self.risk_per_trade <= 0.02:
@@ -47,6 +48,8 @@ class RiskConfig:
             )
         if self.atr_stop_multiplier <= 0 or self.atr_tp_multiplier <= 0:
             raise ValueError("ATR multipliers must be positive")
+        if not 0 < self.max_position_pct <= 1:
+            raise ValueError("max_position_pct must be in (0, 1]")
 
 
 class RiskManager:
@@ -107,9 +110,19 @@ class RiskManager:
     def take_profit_distance(self, stop_dist: float) -> float:
         return stop_dist * self.config.atr_tp_multiplier / self.config.atr_stop_multiplier
 
-    def position_size(self, equity: float, stop_dist: float) -> float:
-        """Units such that hitting the stop loses ~risk_per_trade of equity."""
+    def position_size(
+        self, equity: float, stop_dist: float, price: Optional[float] = None
+    ) -> float:
+        """Units such that hitting the stop loses ~risk_per_trade of equity.
+
+        When `price` is given, the position's total value is also capped at
+        ``max_position_pct`` of equity — a percentage cap works for any
+        instrument at any price, unlike a fixed unit count (1 "unit" of BTC
+        and 1 of ETH are wildly different amounts of money).
+        """
         if stop_dist <= 0 or equity <= 0:
             return 0.0
         units = equity * self.config.risk_per_trade / stop_dist
+        if price is not None and price > 0:
+            units = min(units, equity * self.config.max_position_pct / price)
         return min(units, self.config.max_units)

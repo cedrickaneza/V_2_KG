@@ -201,7 +201,7 @@ class TradingBot:
         if not stop_dist:
             log.warning("%s: no ATR available yet — skipping entry", instrument)
             return
-        units = self.risk.position_size(equity, stop_dist) * stance
+        units = self.risk.position_size(equity, stop_dist, price=last_close) * stance
         if units == 0:
             log.warning("%s: position size rounded to 0 — equity too small for this stop",
                         instrument)

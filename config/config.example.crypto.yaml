@@ -45,7 +45,7 @@ risk:
   atr_tp_multiplier: 3.0       # take-profit at 3x ATR (1.5 : 1 reward-to-risk)
   max_daily_loss_pct: 0.02     # lose 2% in a day -> no new trades until tomorrow
   max_drawdown_pct: 0.10       # lose 10% from peak -> bot halts entirely
-  max_units: 1                 # crypto units are the COIN itself — 1 = cap at 1 BTC, tune per instrument
+  max_position_pct: 0.25       # no single position may exceed 25% of the account
 
 alpaca:
   # "limit" = the patient buyer: rest at the bid for up to 2 minutes to pay

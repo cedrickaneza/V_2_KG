@@ -30,6 +30,26 @@ class TestPositionSizing(unittest.TestCase):
         self.assertAlmostEqual(units, 0.1)
         self.assertGreater(units, 0)
 
+    def test_notional_cap_scales_with_price(self):
+        """A tight stop on a cheap coin must not buy a huge position: the
+        position's VALUE is capped at max_position_pct of equity."""
+        risk = RiskManager(RiskConfig(risk_per_trade=0.005, max_position_pct=0.25))
+        # risk $50, stop only $2 away -> raw sizing wants 25 coins;
+        # at $100/coin that's $2,500 = 25% of a $10k account -> exactly at cap
+        self.assertAlmostEqual(risk.position_size(10_000, 2.0, price=100.0), 25.0)
+        # halve the stop -> raw sizing wants 50 coins ($5,000) -> capped to 25
+        self.assertAlmostEqual(risk.position_size(10_000, 1.0, price=100.0), 25.0)
+
+    def test_notional_cap_ignored_without_price(self):
+        risk = RiskManager(RiskConfig(risk_per_trade=0.005, max_position_pct=0.25))
+        self.assertAlmostEqual(risk.position_size(10_000, 1.0), 50.0)
+
+    def test_config_rejects_bad_position_pct(self):
+        with self.assertRaises(ValueError):
+            RiskConfig(max_position_pct=0.0)
+        with self.assertRaises(ValueError):
+            RiskConfig(max_position_pct=1.5)
+
     def test_config_rejects_reckless_risk(self):
         with self.assertRaises(ValueError):
             RiskConfig(risk_per_trade=0.10)  # 10% per trade — never
