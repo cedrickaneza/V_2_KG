@@ -1,0 +1,54 @@
+# forexbot configuration — Alpaca (crypto)
+# Copy this file to config/config.yaml (which is git-ignored) and edit.
+# Your Alpaca API keys go in ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY
+# environment variables, NEVER in this file.
+#
+# Sign up free at https://alpaca.markets/ (email + password, no identity
+# verification for paper trading) and generate keys under API Keys.
+#
+# IMPORTANT: Alpaca cannot short crypto — the bot automatically treats every
+# SHORT signal as FLAT when broker: alpaca. This is a hard platform fact,
+# not a setting. Always re-run backtests with --long-only before trusting a
+# number for this venue, and use --spread-pct 0.005 so fees are honest.
+#
+# The defaults below follow the findings in docs/research-log.md:
+# DAILY bars (hourly trading dies to fees), trend-following strategies,
+# and both BTC and ETH for more chances to catch a trend.
+
+broker: alpaca
+
+# "practice" = Alpaca PAPER trading (fake money, real prices). Start here.
+# "live" additionally requires FOREXBOT_I_UNDERSTAND_LIVE_RISK=yes in the
+# environment — do not touch it until you have months of profitable
+# practice results.
+mode: practice
+
+# When true, the bot logs the orders it WOULD place without sending them.
+dry_run: true
+
+instruments:            # each instrument gets its own strategy instance
+  - BTC/USD
+  - ETH/USD
+granularity: 1Day       # the timeframe that survived fee-honest testing
+lookback: 300           # candles of history handed to the strategy each cycle
+
+strategy:
+  name: donchian_breakout   # best out-of-sample result so far; or: sma_crossover
+  params:
+    entry_period: 55
+    exit_period: 20
+
+risk:
+  risk_per_trade: 0.005        # risk 0.5% of equity per trade (max allowed: 0.02)
+  atr_period: 14
+  atr_stop_multiplier: 2.0     # stop-loss at 2x ATR from entry
+  atr_tp_multiplier: 3.0       # take-profit at 3x ATR (1.5 : 1 reward-to-risk)
+  max_daily_loss_pct: 0.02     # lose 2% in a day -> no new trades until tomorrow
+  max_drawdown_pct: 0.10       # lose 10% from peak -> bot halts entirely
+  max_position_pct: 0.25       # no single position may exceed 25% of the account
+
+alpaca:
+  # "limit" = the patient buyer: rest at the bid for up to 2 minutes to pay
+  # Alpaca's cheaper maker fee, then fall back to a market order so no
+  # signal is ever dropped. "market" = always instant, always taker fee.
+  entry: limit

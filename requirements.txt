@@ -1,0 +1,4 @@
+# Only needed for live/paper trading against OANDA and for YAML config.
+# Backtesting on CSV data works with the Python standard library alone.
+requests>=2.31.0
+PyYAML>=6.0

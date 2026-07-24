@@ -1,0 +1,42 @@
+# forexbot configuration — OANDA (forex)
+# Copy this file to config/config.yaml (which is git-ignored) and edit.
+# Your OANDA API token goes in the OANDA_API_TOKEN environment variable,
+# NEVER in this file.
+#
+# No OANDA account? See config.example.crypto.yaml for the Alpaca/crypto
+# path instead — it has an easier, no-ID-verification signup.
+
+broker: oanda
+
+# "practice" = OANDA demo account (fake money, real prices). Start here.
+# "live" additionally requires FOREXBOT_I_UNDERSTAND_LIVE_RISK=yes in the
+# environment — do not touch it until you have months of profitable
+# practice results.
+mode: practice
+
+# When true, the bot logs the orders it WOULD place without sending them.
+# Great for a first session to watch decisions scroll by. Set to false to
+# let it actually trade on the practice account.
+dry_run: true
+
+instrument: EUR_USD     # most liquid pair = tightest spreads, best for learning
+granularity: H1         # decide once per hour; calm pace, fewer spread costs
+lookback: 300           # candles of history handed to the strategy each cycle
+
+strategy:
+  name: sma_crossover   # or: rsi_mean_reversion / donchian_breakout
+  params:
+    fast: 20
+    slow: 50
+
+risk:
+  risk_per_trade: 0.005        # risk 0.5% of equity per trade (max allowed: 0.02)
+  atr_period: 14
+  atr_stop_multiplier: 2.0     # stop-loss at 2x ATR from entry
+  atr_tp_multiplier: 3.0       # take-profit at 3x ATR (1.5 : 1 reward-to-risk)
+  max_daily_loss_pct: 0.02     # lose 2% in a day -> no new trades until tomorrow
+  max_drawdown_pct: 0.10       # lose 10% from peak -> bot halts entirely
+  max_units: 100000            # absolute cap on position size
+
+oanda:
+  account_id: "101-XXX-XXXXXXX-XXX"   # from your OANDA practice dashboard
