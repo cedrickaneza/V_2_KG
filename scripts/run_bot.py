@@ -11,6 +11,12 @@ Alpaca (crypto):
     export ALPACA_API_KEY_ID="your-key-id"
     export ALPACA_API_SECRET_KEY="your-secret-key"
     python scripts/run_bot.py --config config/config.yaml
+
+Whenever the underlying account changes — e.g. you reset your Alpaca paper
+balance, or switch to a new account — run this once first, or the bot will
+compare the new balance against the OLD account's remembered peak equity
+and can immediately (falsely) trigger the drawdown kill switch:
+    python scripts/run_bot.py --reset-state
 """
 
 from __future__ import annotations
@@ -21,8 +27,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from forexbot.bot import TradingBot, setup_logging  # noqa: E402
+from forexbot.bot import STATE_FILE, TradingBot, setup_logging  # noqa: E402
 from forexbot.config import load_config  # noqa: E402
+from forexbot.state import clear_state  # noqa: E402
 
 
 def main() -> None:
@@ -32,7 +39,20 @@ def main() -> None:
                         help="run a single decision cycle and exit — for daily-candle "
                              "setups where the bot is woken once a day instead of "
                              "running continuously")
+    parser.add_argument("--reset-state", action="store_true",
+                        help="clear saved risk/take-profit history and exit (does NOT run "
+                             "a cycle). Use this once whenever the underlying account "
+                             "changes — e.g. you reset your Alpaca paper balance — or a "
+                             "stale 'peak equity' from the old account can immediately "
+                             "trip the kill switch on the new one")
     args = parser.parse_args()
+
+    if args.reset_state:
+        if clear_state(STATE_FILE):
+            print(f"cleared saved state at {STATE_FILE}")
+        else:
+            print(f"no saved state found at {STATE_FILE} — nothing to clear")
+        return
 
     if not Path(args.config).exists():
         raise SystemExit(

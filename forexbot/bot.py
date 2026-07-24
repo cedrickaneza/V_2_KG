@@ -124,6 +124,13 @@ class TradingBot:
 
         if self.risk.halted:
             log.error("KILL SWITCH ACTIVE: %s — no trading", self.risk.halt_reason)
+            log.error(
+                "If you recently switched brokers/accounts or reset a paper "
+                "balance, this is likely stale memory rather than a real loss "
+                "— saved history from the OLD account is being compared "
+                "against the NEW account's equity. Fix: stop the bot and run "
+                "`python scripts/run_bot.py --reset-state` once."
+            )
             return
 
         for instrument in self.config.instruments:

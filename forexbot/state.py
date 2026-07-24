@@ -13,6 +13,13 @@ would be lost between runs, silently changing behaviour vs the backtest:
 
 Everything else is either on the broker's servers (positions, stop orders)
 or recomputed from candles each cycle.
+
+A known sharp edge: this state has no idea WHICH account it belongs to.
+Switch to a different paper account (e.g. after resetting your Alpaca
+paper balance) and the old peak_equity is still on disk — the risk
+manager will compare the new, smaller balance against that stale peak and
+immediately (and falsely) trip the drawdown kill switch. Use clear_state()
+via `run_bot.py --reset-state` whenever the underlying account changes.
 """
 
 from __future__ import annotations
@@ -65,3 +72,14 @@ def load_state(path: str | Path, risk: RiskManager, broker: Any) -> bool:
         }
         broker._stop_order_ids = dict(broker_data.get("stop_order_ids", {}))
     return True
+
+
+def clear_state(path: str | Path) -> bool:
+    """Delete saved state — use when the underlying account has changed
+    (a new/reset paper balance, a different broker) so old history isn't
+    mistaken for the new account's history. Returns True if a file existed."""
+    path = Path(path)
+    if path.exists():
+        path.unlink()
+        return True
+    return False
